@@ -60,11 +60,18 @@ class KubernetesPlatformAdapter:
         result = await self._kubectl_run(args, timeout=15)
         return {"ready": result["exit_code"] == 0, "output": result["stdout"], "error": result["stderr"]}
 
-    async def apply_manifest(self, manifest: dict[str, Any], namespace: str = "default") -> dict[str, Any]:
-        """Apply a single Kubernetes manifest."""
+    async def apply_manifest(self, manifest: dict[str, Any], namespace: str = "") -> dict[str, Any]:
+        """Apply a Kubernetes manifest. Namespace extracted from manifest metadata if not provided."""
+        ns = namespace or manifest.get("metadata", {}).get("namespace", "default")
+        # For cluster-scoped resources (Namespace), don't pass -n
+        kind = manifest.get("kind", "")
+        if kind == "Namespace":
+            args = [self._kubectl, "apply", "-f", "-"]
+        else:
+            args = [self._kubectl, "apply", "-n", ns, "-f", "-"]
         manifest_json = json.dumps(manifest)
         proc = await asyncio.create_subprocess_exec(
-            self._kubectl, "apply", "-n", namespace, "-f", "-",
+            *args,
             stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
