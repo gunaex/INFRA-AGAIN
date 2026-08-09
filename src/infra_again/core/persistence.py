@@ -84,6 +84,7 @@ class RunStore:
                     policy_decision TEXT,
                     approval_state TEXT,
                     error TEXT,
+                    final_result TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
@@ -394,3 +395,25 @@ class RunStore:
                 (run_id,),
             ).fetchall()
             return [dict(r) for r in rows]
+
+    # ------------------------------------------------------------------
+    # Final result persistence
+    # ------------------------------------------------------------------
+
+    def persist_final_result(self, run_id: str, result_json: str) -> None:
+        """Persist the canonical InfrastructureResult JSON for exact retrieval."""
+        with self._get_conn() as conn:
+            conn.execute(
+                "UPDATE runs SET final_result = ?, updated_at = ? WHERE run_id = ?",
+                (result_json, _now(), run_id),
+            )
+
+    def get_final_result(self, run_id: str) -> str | None:
+        """Retrieve the persisted canonical InfrastructureResult."""
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT final_result FROM runs WHERE run_id = ?", (run_id,)
+            ).fetchone()
+            if row is None or row["final_result"] is None:
+                return None
+            return row["final_result"]

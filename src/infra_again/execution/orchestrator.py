@@ -1,8 +1,16 @@
 """
-Execution Orchestrator for INFRA-AGAIN — Phase 2A.
+Execution Orchestrator for INFRA-AGAIN — Phase 2A.1 HARDENED.
 
 Full pipeline with SQLite persistence, ownership tracking,
 explicit state machine, evidence persistence, and restart/resume.
+
+Fixes from 2A.1:
+- Idempotency: EXECUTING/OBSERVING/VALIDATING do NOT return SUCCESS
+- Persisted final InfrastructureResult for exact idempotent retrieval
+- Destroy bypass removed: only explicit ownership allows AUTO destroy
+- Missing/unknown ownership → ASK (never AUTO)
+- Restart from EXECUTING → REQUIRES_RECONCILIATION
+- Validation failure → FAILED run state (not partial success)
 """
 
 from __future__ import annotations
@@ -51,6 +59,33 @@ class ActionPolicy(str, Enum):
     BLOCK = "BLOCK"
 
 
+class IdempotencyStatus:
+    """Truthful idempotent response status — never fakes SUCCESS."""
+
+    ACTIVE_STATES = {
+        ExecutionState.EXECUTING.value,
+        ExecutionState.OBSERVING.value,
+        ExecutionState.VALIDATING.value,
+        ExecutionState.REQUIRES_RECONCILIATION.value,
+    }
+    TERMINAL_GOOD = {ExecutionState.COMPLETED.value}
+    TERMINAL_BAD = {
+        ExecutionState.FAILED.value,
+        ExecutionState.BLOCKED.value,
+        ExecutionState.CANCELLED.value,
+    }
+
+    @staticmethod
+    def classify(state: str) -> str:
+        if state in IdempotencyStatus.TERMINAL_GOOD:
+            return "COMPLETED"
+        if state in IdempotencyStatus.TERMINAL_BAD:
+            return "TERMINAL_NON_SUCCESS"
+        if state in IdempotencyStatus.ACTIVE_STATES:
+            return "IN_PROGRESS"
+        return "OTHER"
+
+
 @dataclass
 class PolicyDecision:
     action: str
@@ -62,7 +97,7 @@ class PolicyDecision:
 
 
 class PolicyEngine:
-    """AIRLOCK policy engine with ownership-aware destroy."""
+    """AIRLOCK policy engine — ownership-aware, no shortcuts."""
 
     @staticmethod
     def evaluate(
@@ -116,15 +151,18 @@ class PolicyEngine:
 
     @staticmethod
     def _evaluate_destroy(target: ExecutionTarget, ctx: dict[str, Any]) -> PolicyDecision:
+        """Ownership-only destroy evaluation — no bypass shortcuts."""
+        resource_id = ctx.get("resource_id", "unknown")
+        ownership = ctx.get("ownership")
+        current_run_id = ctx.get("current_run_id", "")
+
+        # Production: always BLOCK
         if target.mode == ExecutionMode.PRODUCTION:
             return PolicyDecision(action="destroy", policy=ActionPolicy.BLOCK,
                                   reason="Production destroy requires explicit approval",
                                   requires_approval=True)
 
-        resource_id = ctx.get("resource_id", "unknown")
-        ownership = ctx.get("ownership")
-        current_run_id = ctx.get("current_run_id", "")
-
+        # Ownership present: strict rule
         if ownership is not None:
             if ownership.is_auto_destroy_allowed(current_run_id):
                 return PolicyDecision(action="destroy", policy=ActionPolicy.AUTO,
@@ -143,14 +181,9 @@ class PolicyEngine:
                                   reason=f"Destroy requires approval: {'; '.join(reasons)}",
                                   requires_approval=True)
 
-        if target.mode in (ExecutionMode.SIMULATED, ExecutionMode.LOCAL_RUNTIME):
-            if ctx.get("is_isolated_lab"):
-                return PolicyDecision(action="destroy", policy=ActionPolicy.AUTO,
-                                      reason="Destroy in isolated lab target",
-                                      requires_approval=False)
-
+        # No ownership → ASK (never AUTO, regardless of target mode)
         return PolicyDecision(action="destroy", policy=ActionPolicy.ASK,
-                              reason="Destroy requires ownership verification or approval",
+                              reason="Destroy requires ownership verification — ownership unknown",
                               requires_approval=True)
 
 
@@ -198,17 +231,11 @@ class ExecutionOrchestrator:
         target: ExecutionTarget | None = None,
         idempotency_key: str | None = None,
     ) -> InfrastructureResult:
-        # Idempotency check
+        # Idempotency: check for existing run
         if idempotency_key:
             existing = self.store.get_run_by_idempotency(idempotency_key)
-            if existing and existing["state"] in (
-                ExecutionState.COMPLETED.value, ExecutionState.EXECUTING.value,
-                ExecutionState.OBSERVING.value, ExecutionState.VALIDATING.value,
-            ):
-                ctx = self._load_context(existing["run_id"])
-                if ctx:
-                    self._ctx = ctx
-                    return self._build_result(ctx, InfrastructureStatus.SUCCESS)
+            if existing:
+                return self._handle_idempotent(existing)
 
         ctx = OrchestrationContext(request=request, target=target)
         ctx.started_at = datetime.now(timezone.utc)
@@ -234,7 +261,11 @@ class ExecutionOrchestrator:
             ctx.policy_decisions.append(decision)
             if decision.policy == ActionPolicy.BLOCK:
                 await self._transition(ctx, ExecutionState.BLOCKED, decision.reason)
-                return self._blocked_result(ctx, decision.reason)
+                return self._finalize(ctx, InfrastructureStatus.FAILED,
+                    extra_evidence=[EvidenceItem(type=EvidenceType.PLAN_APPROVAL,
+                        source="infrastructure-again", reference="airlock",
+                        summary=f"BLOCKED: {decision.reason}",
+                        timestamp=datetime.now(timezone.utc))])
 
             await self._transition(ctx, ExecutionState.PLANNING)
             if self.provider_adapter:
@@ -256,7 +287,7 @@ class ExecutionOrchestrator:
                 await self._transition(ctx, ExecutionState.COMPLETED, "PLAN_ONLY — no mutation")
                 ctx.evidence.plan = ctx.plan
                 ctx.evidence.limitations.append("PLAN_ONLY mode — no infrastructure mutation")
-                return self._build_result(ctx, InfrastructureStatus.SUCCESS)
+                return self._finalize(ctx, InfrastructureStatus.SUCCESS)
 
             await self._transition(ctx, ExecutionState.WAITING_FOR_APPROVAL)
             exec_decision = self.policy_engine.evaluate("apply", target)
@@ -267,11 +298,11 @@ class ExecutionOrchestrator:
 
             if exec_decision.policy in (ActionPolicy.BLOCK, ActionPolicy.ASK):
                 await self._transition(ctx, ExecutionState.BLOCKED, exec_decision.reason)
-                return self._build_result(ctx, InfrastructureStatus.PARTIAL, extra_evidence=[
-                    EvidenceItem(type=EvidenceType.PLAN_APPROVAL, source="infrastructure-again",
-                                 reference="policy-gate",
-                                 summary=f"Requires approval: {exec_decision.reason}",
-                                 timestamp=datetime.now(timezone.utc))])
+                return self._finalize(ctx, InfrastructureStatus.PARTIAL,
+                    extra_evidence=[EvidenceItem(type=EvidenceType.PLAN_APPROVAL,
+                        source="infrastructure-again", reference="policy-gate",
+                        summary=f"Requires approval: {exec_decision.reason}",
+                        timestamp=datetime.now(timezone.utc))])
 
             await self._transition(ctx, ExecutionState.EXECUTING)
             if self.provider_adapter:
@@ -302,6 +333,7 @@ class ExecutionOrchestrator:
                         self.store.update_resource_state(resource.resource_id, r_obs)
 
             await self._transition(ctx, ExecutionState.VALIDATING)
+            validation_failed = False
             if self.provider_adapter and ctx.plan:
                 desired = self._plan_to_desired_state(ctx.plan)
                 obs = ctx.evidence.observed_resources[-1] if ctx.evidence.observed_resources else {}
@@ -312,33 +344,109 @@ class ExecutionOrchestrator:
                                  "drift_detected": v.drift_detected} for v in validations]})
                 all_match = all(v.matches for v in validations if v.matches is not None)
                 if not all_match:
+                    validation_failed = True
                     ctx.errors.append("VALIDATION FAIL: desired != observed")
 
-            status = InfrastructureStatus.SUCCESS if not ctx.errors else InfrastructureStatus.PARTIAL
-            if ctx.errors:
-                await self._transition(ctx, ExecutionState.FAILED, "; ".join(ctx.errors))
-            else:
-                await self._transition(ctx, ExecutionState.COMPLETED)
+            # Validation failure → FAILED state, not SUCCESS
+            if validation_failed or ctx.errors:
+                await self._transition(ctx, ExecutionState.FAILED,
+                    "; ".join(ctx.errors) if ctx.errors else "Validation failed")
+                return self._finalize(ctx, InfrastructureStatus.FAILED)
+
+            await self._transition(ctx, ExecutionState.COMPLETED)
+            status = InfrastructureStatus.SUCCESS
 
         except Exception as e:
             try:
                 await self._transition(ctx, ExecutionState.FAILED, str(e))
             except RuntimeError:
-                pass  # Transition may fail if already in failed state
+                pass
             ctx.errors.append(str(e))
             status = InfrastructureStatus.FAILED
 
-        ctx.completed_at = datetime.now(timezone.utc)
-        result = self._build_result(ctx, status)
-        self._persist_file(ctx, "final-result.json", result.model_dump(mode="json"))
-        return result
+        return self._finalize(ctx, status)
+
+    # ------------------------------------------------------------------
+    # Idempotency handling
+    # ------------------------------------------------------------------
+
+    def _handle_idempotent(self, existing: dict[str, Any]) -> InfrastructureResult:
+        """Handle duplicate idempotency key truthfully."""
+        state = existing["state"]
+        run_id = existing["run_id"]
+        classification = IdempotencyStatus.classify(state)
+
+        if classification == "COMPLETED":
+            # Return the EXACT persisted result
+            persisted = self.store.get_final_result(run_id)
+            if persisted:
+                try:
+                    return InfrastructureResult.model_validate_json(persisted)
+                except Exception:
+                    pass
+            # Fallback: reconstruct from context
+            ctx = self._load_context(run_id)
+            if ctx:
+                self._ctx = ctx
+                return self._build_result(ctx, InfrastructureStatus.SUCCESS)
+
+        if classification == "TERMINAL_NON_SUCCESS":
+            persisted = self.store.get_final_result(run_id)
+            if persisted:
+                try:
+                    return InfrastructureResult.model_validate_json(persisted)
+                except Exception:
+                    pass
+            ctx = self._load_context(run_id)
+            if ctx:
+                self._ctx = ctx
+                return self._build_result(ctx, InfrastructureStatus.FAILED)
+
+        # IN_PROGRESS (EXECUTING, OBSERVING, VALIDATING, REQUIRES_RECONCILIATION)
+        # Do NOT return SUCCESS — return truthful status
+        ctx = self._load_context(run_id)
+        if ctx:
+            self._ctx = ctx
+            if state == ExecutionState.REQUIRES_RECONCILIATION.value:
+                return self._build_result(ctx, InfrastructureStatus.FAILED, extra_evidence=[
+                    EvidenceItem(type=EvidenceType.PLAN_APPROVAL, source="infrastructure-again",
+                                 reference=f"run-{run_id}",
+                                 summary=f"Run requires reconciliation — state={state}",
+                                 timestamp=datetime.now(timezone.utc))])
+            return self._build_result(ctx, InfrastructureStatus.PARTIAL, extra_evidence=[
+                EvidenceItem(type=EvidenceType.PLAN_APPROVAL, source="infrastructure-again",
+                             reference=f"run-{run_id}",
+                             summary=f"Run in progress — state={state}",
+                             timestamp=datetime.now(timezone.utc))])
+
+        # OTHER / fallback
+        return InfrastructureResult(
+            correlationId=existing.get("correlation_id", ""),
+            workPackageId=existing.get("work_package_id", ""),
+            infrastructureRequestId=existing.get("infrastructure_request_id", ""),
+            status=InfrastructureStatus.PARTIAL,
+            provider=existing.get("provider", Provider.AWS.value),
+            platform=existing.get("platform", Platform.NATIVE_VM.value),
+            evidence=[EvidenceItem(type=EvidenceType.PLAN_APPROVAL,
+                source="infrastructure-again", reference=f"run-{run_id}",
+                summary=f"Idempotent — state={state}",
+                timestamp=datetime.now(timezone.utc))],
+            completedAt=datetime.now(timezone.utc))
 
     # ------------------------------------------------------------------
     # Restart / Resume
     # ------------------------------------------------------------------
 
     def load_run(self, run_id: str) -> OrchestrationContext | None:
-        return self._load_context(run_id)
+        ctx = self._load_context(run_id)
+        if ctx:
+            # Safety: if restarting during EXECUTING, mark for reconciliation
+            if ctx.state == ExecutionState.EXECUTING:
+                self.store.transition_state(
+                    run_id, ExecutionState.REQUIRES_RECONCILIATION,
+                    "Restarted while EXECUTING — manual reconciliation required")
+                ctx.state = ExecutionState.REQUIRES_RECONCILIATION
+        return ctx
 
     def _load_context(self, run_id: str) -> OrchestrationContext | None:
         run = self.store.get_run(run_id)
@@ -346,6 +454,8 @@ class ExecutionOrchestrator:
             return None
         ctx = OrchestrationContext(run_id=run_id)
         ctx.state = ExecutionState(run["state"])
+
+        # Reconstruct target
         if run.get("execution_target_type"):
             ctx.target = ExecutionTarget(
                 mode=ExecutionMode(run["execution_mode"]) if run.get("execution_mode") else ExecutionMode.PLAN_ONLY,
@@ -353,6 +463,23 @@ class ExecutionOrchestrator:
                 platform=Platform(run["platform"]) if run.get("platform") else Platform.NATIVE_VM,
                 target_type=ExecutionTargetType(run["execution_target_type"]),
                 endpoint=run.get("execution_target_endpoint"))
+
+        # Reconstruct plan
+        if run.get("plan"):
+            try:
+                plan_data = json.loads(run["plan"])
+                ctx.plan = InfrastructurePlan(
+                    plan_id=plan_data.get("plan_id", ""),
+                    correlation_id=run.get("correlation_id", ""),
+                    request_id=run.get("infrastructure_request_id", ""),
+                    provider=Provider(run["provider"]) if run.get("provider") else None,
+                    platform=Platform(run["platform"]) if run.get("platform") else None,
+                    execution_target=ctx.target,
+                    risk_assessment=plan_data.get("risk_assessment", ""))
+            except Exception:
+                pass
+
+        # Reconstruct owned resources
         for r in self.store.get_resources_for_run(run_id):
             ctx.owned_resources.append(OwnedResource(
                 resource_id=r["resource_id"], resource_type=r["resource_type"],
@@ -361,6 +488,14 @@ class ExecutionOrchestrator:
                     managed_by=r["managed_by"], created_by_run_id=r["created_by_run_id"],
                     ephemeral=bool(r["ephemeral"]),
                     target_scope=TargetScope(r["target_scope"]))))
+
+        # Reconstruct policy decisions from evidence
+        for ev in self.store.get_evidence(run_id):
+            if ev.get("summary") and "policy" in ev.get("summary", "").lower():
+                ctx.policy_decisions.append(PolicyDecision(
+                    action="recorded", policy=ActionPolicy.ASK,
+                    reason=ev.get("summary", ""), requires_approval=True))
+
         return ctx
 
     # ------------------------------------------------------------------
@@ -370,7 +505,7 @@ class ExecutionOrchestrator:
     async def destroy_resource(
         self, run_id: str, resource_id: str, target: ExecutionTarget,
     ) -> tuple[bool, str]:
-        can_destroy, reason = self.store.can_auto_destroy(resource_id, run_id)
+        """Destroy a resource — ownership-gated."""
         ownership = ResourceOwnership()
         resource = self.store.get_resource(resource_id)
         if resource:
@@ -380,14 +515,15 @@ class ExecutionOrchestrator:
                 target_scope=TargetScope(resource["target_scope"]))
 
         decision = self.policy_engine.evaluate("destroy", target, context={
-            "resource_id": resource_id, "ownership": ownership,
-            "current_run_id": run_id, "is_isolated_lab": target.is_safe})
+            "resource_id": resource_id, "ownership": ownership if resource else None,
+            "current_run_id": run_id})
 
         if decision.policy == ActionPolicy.BLOCK:
             return False, f"BLOCKED: {decision.reason}"
-        if decision.policy == ActionPolicy.ASK and not can_destroy:
-            return False, f"ASK: {reason} — approval required"
+        if decision.policy == ActionPolicy.ASK:
+            return False, f"ASK: {decision.reason}"
 
+        # AUTO only
         if self.provider_adapter:
             cs = await self.provider_adapter.destroy(target, [resource_id])
             self.store.log_apply(run_id=run_id, resource_id=resource_id,
@@ -407,6 +543,24 @@ class ExecutionOrchestrator:
                 f"Valid: {[s.value for s in VALID_TRANSITIONS.get(ctx.state, set())]}")
         ctx.state = to
         self.store.transition_state(ctx.run_id, to, reason)
+
+    # ------------------------------------------------------------------
+    # Finalize
+    # ------------------------------------------------------------------
+
+    def _finalize(
+        self, ctx: OrchestrationContext, status: InfrastructureStatus,
+        extra_evidence: list[EvidenceItem] | None = None,
+    ) -> InfrastructureResult:
+        ctx.completed_at = datetime.now(timezone.utc)
+        result = self._build_result(ctx, status, extra_evidence)
+
+        # Persist the exact result for idempotent retrieval
+        result_json = result.model_dump_json()
+        self.store.persist_final_result(ctx.run_id, result_json)
+        self._persist_file(ctx, "final-result.json", json.loads(result_json))
+
+        return result
 
     # ------------------------------------------------------------------
     # Persistence
@@ -493,13 +647,6 @@ class ExecutionOrchestrator:
         for m in plan.capability_mappings:
             desired[m.resource_type] = m.resource_properties
         return desired
-
-    def _blocked_result(self, ctx: OrchestrationContext, reason: str) -> InfrastructureResult:
-        ctx.completed_at = datetime.now(timezone.utc)
-        return self._build_result(ctx, InfrastructureStatus.FAILED, extra_evidence=[
-            EvidenceItem(type=EvidenceType.PLAN_APPROVAL, source="infrastructure-again",
-                         reference="airlock", summary=f"BLOCKED: {reason}",
-                         timestamp=datetime.now(timezone.utc))])
 
     def _build_result(self, ctx: OrchestrationContext, status: InfrastructureStatus,
                       extra_evidence: list[EvidenceItem] | None = None) -> InfrastructureResult:
