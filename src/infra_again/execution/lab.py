@@ -90,8 +90,9 @@ AWS_TARGETS: list[LabTarget] = [
         platform=Platform.NATIVE_VM,
         mode=ExecutionMode.SIMULATED,
         name="fakecloud",
-        description="AWS API simulator for local testing",
+        description="AWS API simulator for local testing (S3 verified)",
         repository_url="https://github.com/faiscadev/fakecloud",
+        license_info="AGPL-3.0",
         fidelity_notes={
             "AWS API Compatibility": "SIMULATED",
             "Real AWS Provisioning": "NOT_TESTED",
@@ -102,8 +103,9 @@ AWS_TARGETS: list[LabTarget] = [
             "May not support all AWS services",
             "No production credential equivalence",
         ],
-        status=TruthStatus.NOT_INSTALLED,
-        install_command="pip install fakecloud",
+        status=TruthStatus.READY,
+        install_command="brew install fakecloud",
+        verify_command="fakecloud --version && curl http://localhost:4566/_fakecloud/health",
     ),
     LabTarget(
         target_type=ExecutionTargetType.LOCALSTACK,

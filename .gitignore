@@ -15,3 +15,5 @@ venv/
 *.tfstate
 *.tfstate.*
 .terraform/
+.ai/infra-again.db
+.ai/infra-runs/

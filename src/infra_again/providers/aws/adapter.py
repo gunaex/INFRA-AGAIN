@@ -1,25 +1,29 @@
 """
-AWS Provider Adapter — PLAN_ONLY implementation.
+AWS Provider Adapter — PLAN_ONLY + SIMULATED (fakecloud) implementation.
 
-This is the FIRST executable provider adapter for INFRA-AGAIN.
-It supports PLAN_ONLY mode for architecture planning without
-requiring AWS credentials or real infrastructure.
+Supports:
+- PLAN_ONLY: architecture planning without credentials
+- SIMULATED: real boto3 calls against fakecloud local AWS emulator
 
-Do NOT require AWS credentials.
+Do NOT silently fall back to real AWS.
 Do NOT hardcode AWS service names into provider-neutral abstractions.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
 
 from ...core.domain import (
     CapabilityMapping,
     CapabilityRequirement,
+    ChangeAction,
+    ChangeItem,
     ChangeSet,
     ExecutionMode,
     ExecutionTarget,
+    ExecutionTargetType,
     InfrastructurePlan,
     Provider,
     TruthStatus,
@@ -160,25 +164,71 @@ class AwsProviderAdapter(ProviderAdapter):
         target: ExecutionTarget,
     ) -> ChangeSet:
         """
-        Execute plan against AWS.
-
-        SAFETY: Returns empty ChangeSet in PLAN_ONLY mode.
-        Real execution requires AWS credentials + policy approval.
+        Execute plan. PLAN_ONLY returns empty. SIMULATED+FAKECLOUD uses boto3.
         """
         if target.mode == ExecutionMode.PLAN_ONLY:
-            return ChangeSet(
-                provider=Provider.AWS,
-                platform=target.platform,
-                iac_tool="OPENTOFU",
-            )
+            return ChangeSet(provider=Provider.AWS, platform=target.platform, iac_tool="OPENTOFU")
 
-        # Real apply would use OpenTofu/Terraform here
-        # Gated by policy approval upstream
-        return ChangeSet(
-            provider=Provider.AWS,
-            platform=target.platform,
-            iac_tool="OPENTOFU",
+        if target.mode == ExecutionMode.SIMULATED and target.target_type == ExecutionTargetType.FAKECLOUD:
+            return await self._apply_fakecloud(plan, target)
+
+        return ChangeSet(provider=Provider.AWS, platform=target.platform, iac_tool="OPENTOFU")
+
+    async def _apply_fakecloud(self, plan: InfrastructurePlan, target: ExecutionTarget) -> ChangeSet:
+        """Real boto3 S3 operations against fakecloud."""
+        import boto3
+
+        endpoint = target.endpoint or "http://localhost:4566"
+        s3 = boto3.client(
+            "s3",
+            endpoint_url=endpoint,
+            aws_access_key_id="test",
+            aws_secret_access_key="test",
+            region_name="us-east-1",
         )
+
+        changes: list[ChangeItem] = []
+        for mapping in plan.capability_mappings:
+            if mapping.resource_type == "AWS::S3::Bucket":
+                bucket_name = mapping.resource_properties.get("bucket_name", f"infra-again-{plan.plan_id[:8]}")
+                try:
+                    s3.create_bucket(Bucket=bucket_name)
+                    changes.append(ChangeItem(
+                        action=ChangeAction.CREATE,
+                        resource_type="AWS::S3::Bucket",
+                        resource_id=bucket_name,
+                        properties={"bucket_name": bucket_name, "endpoint": endpoint},
+                    ))
+                except Exception as e:
+                    changes.append(ChangeItem(
+                        action=ChangeAction.CREATE,
+                        resource_type="AWS::S3::Bucket",
+                        resource_id=bucket_name,
+                        properties={"error": str(e)},
+                        is_destructive=False,
+                    ))
+
+            elif mapping.resource_type == "AWS::S3::Object":
+                bucket = mapping.resource_properties.get("bucket", "")
+                key = mapping.resource_properties.get("key", "test-object")
+                body = mapping.resource_properties.get("body", "hello-again")
+                try:
+                    s3.put_object(Bucket=bucket, Key=key, Body=body)
+                    changes.append(ChangeItem(
+                        action=ChangeAction.CREATE,
+                        resource_type="AWS::S3::Object",
+                        resource_id=f"{bucket}/{key}",
+                        properties={"bucket": bucket, "key": key},
+                    ))
+                except Exception as e:
+                    changes.append(ChangeItem(
+                        action=ChangeAction.CREATE,
+                        resource_type="AWS::S3::Object",
+                        resource_id=f"{bucket}/{key}",
+                        properties={"error": str(e)},
+                    ))
+
+        return ChangeSet(changes=changes, provider=Provider.AWS, platform=target.platform, iac_tool="DIRECT")
 
     # ------------------------------------------------------------------
     # Observe
@@ -189,10 +239,48 @@ class AwsProviderAdapter(ProviderAdapter):
         target: ExecutionTarget,
         resource_ids: list[str] | None = None,
     ) -> dict[str, Any]:
-        """Observe actual AWS infrastructure state."""
-        if target.mode in (ExecutionMode.PLAN_ONLY, ExecutionMode.SIMULATED):
-            return {"observed": {}, "note": "PLAN_ONLY/SIMULATED — no real observation"}
+        """Observe actual infrastructure state."""
+        if target.mode == ExecutionMode.PLAN_ONLY:
+            return {"observed": {}, "note": "PLAN_ONLY — no real observation"}
+
+        if target.mode == ExecutionMode.SIMULATED and target.target_type == ExecutionTargetType.FAKECLOUD:
+            return await self._observe_fakecloud(target, resource_ids)
+
         return {"observed": {}, "status": TruthStatus.NOT_CONFIGURED.value}
+
+    async def _observe_fakecloud(
+        self, target: ExecutionTarget, resource_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Query fakecloud for actual S3 state."""
+        import boto3
+
+        endpoint = target.endpoint or "http://localhost:4566"
+        try:
+            s3 = boto3.client(
+                "s3", endpoint_url=endpoint,
+                aws_access_key_id="test", aws_secret_access_key="test",
+                region_name="us-east-1",
+            )
+            resp = s3.list_buckets()
+            buckets = {b["Name"]: {"name": b["Name"], "creation_date": str(b.get("CreationDate", ""))}
+                       for b in resp.get("Buckets", [])}
+
+            if resource_ids:
+                buckets = {k: v for k, v in buckets.items() if k in resource_ids}
+
+            return {
+                "observed": buckets,
+                "observed_at": datetime.now(timezone.utc).isoformat(),
+                "endpoint": endpoint,
+                "resource_count": len(buckets),
+            }
+        except Exception as e:
+            return {
+                "observed": {},
+                "observed_at": datetime.now(timezone.utc).isoformat(),
+                "endpoint": endpoint,
+                "error": str(e),
+            }
 
     # ------------------------------------------------------------------
     # Validate
@@ -203,18 +291,25 @@ class AwsProviderAdapter(ProviderAdapter):
         desired: dict[str, Any],
         observed: dict[str, Any],
     ) -> list[ValidationResult]:
-        """Compare desired vs observed AWS state."""
+        """Compare desired vs observed state."""
         results: list[ValidationResult] = []
+        observed_data = observed.get("observed", observed)
+
         for key, desired_state in desired.items():
-            observed_state = observed.get(key)
-            results.append(ValidationResult(
+            obs_state = observed_data.get(key) if isinstance(observed_data, dict) else None
+            matches = obs_state is not None
+
+            result = ValidationResult(
                 resource_id=key,
-                desired_state=desired_state if isinstance(desired_state, dict) else {},
-                observed_state=observed_state if isinstance(observed_state, dict) else None,
-                matches=False,
-                drift_detected=False,
-                drift_details="Not observed — PLAN_ONLY or no AWS connection",
-            ))
+                desired_state=desired_state if isinstance(desired_state, dict) else {"value": desired_state},
+                observed_state=obs_state,
+                matches=matches,
+                drift_detected=not matches,
+                drift_details="" if matches else f"Resource {key} not found in observed state",
+                observed_at=datetime.now(timezone.utc),
+            )
+            results.append(result)
+
         return results
 
     # ------------------------------------------------------------------
@@ -226,29 +321,65 @@ class AwsProviderAdapter(ProviderAdapter):
         target: ExecutionTarget,
         resource_ids: list[str] | None = None,
     ) -> ChangeSet:
-        """
-        Destroy AWS resources.
-
-        BLOCKED by default — requires policy approval.
-        Returns empty ChangeSet in PLAN_ONLY.
-        """
+        """Destroy resources — gated by ownership policy upstream."""
         if target.mode == ExecutionMode.PLAN_ONLY:
             return ChangeSet(provider=Provider.AWS)
-        # Real destroy requires AIRLOCK clearance
+
+        if target.mode == ExecutionMode.SIMULATED and target.target_type == ExecutionTargetType.FAKECLOUD:
+            return await self._destroy_fakecloud(target, resource_ids or [])
+
         return ChangeSet(provider=Provider.AWS)
+
+    async def _destroy_fakecloud(
+        self, target: ExecutionTarget, resource_ids: list[str],
+    ) -> ChangeSet:
+        """Delete S3 buckets from fakecloud."""
+        import boto3
+
+        endpoint = target.endpoint or "http://localhost:4566"
+        s3 = boto3.client(
+            "s3", endpoint_url=endpoint,
+            aws_access_key_id="test", aws_secret_access_key="test",
+            region_name="us-east-1",
+        )
+
+        changes: list[ChangeItem] = []
+        for rid in resource_ids:
+            try:
+                s3.delete_bucket(Bucket=rid)
+                changes.append(ChangeItem(
+                    action=ChangeAction.DELETE, resource_type="AWS::S3::Bucket",
+                    resource_id=rid, is_destructive=True))
+            except Exception as e:
+                changes.append(ChangeItem(
+                    action=ChangeAction.DELETE, resource_type="AWS::S3::Bucket",
+                    resource_id=rid, properties={"error": str(e)}))
+
+        return ChangeSet(changes=changes, provider=Provider.AWS, platform=target.platform)
 
     # ------------------------------------------------------------------
     # Status
     # ------------------------------------------------------------------
 
     async def probe_status(self) -> TruthStatus:
-        """Truthfully report AWS connection status."""
-        # Check for AWS credentials/config
+        """Truthfully report AWS/fakecloud connection status."""
         import os
+
+        # Check fakecloud first
+        try:
+            import httpx
+            resp = httpx.get("http://localhost:4566/_fakecloud/health", timeout=2.0)
+            if resp.status_code == 200:
+                return TruthStatus.READY
+        except Exception:
+            pass
+
+        # Check real AWS credentials
         if os.environ.get("AWS_ACCESS_KEY_ID") and os.environ.get("AWS_SECRET_ACCESS_KEY"):
             return TruthStatus.READY
         if os.path.exists(os.path.expanduser("~/.aws/credentials")):
             return TruthStatus.READY
+
         return TruthStatus.NOT_CONFIGURED
 
     # ------------------------------------------------------------------

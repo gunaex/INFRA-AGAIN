@@ -262,6 +262,73 @@ class ExecutionState(str, Enum):
     FAILED = "FAILED"
     BLOCKED = "BLOCKED"
     CANCELLED = "CANCELLED"
+    REQUIRES_RECONCILIATION = "REQUIRES_RECONCILIATION"
+
+
+# Legal state transitions
+VALID_TRANSITIONS: dict[ExecutionState, set[ExecutionState]] = {
+    ExecutionState.DRAFT: {ExecutionState.NORMALIZING, ExecutionState.CANCELLED},
+    ExecutionState.NORMALIZING: {ExecutionState.PLANNING, ExecutionState.FAILED, ExecutionState.CANCELLED},
+    ExecutionState.PLANNING: {ExecutionState.PLAN_READY, ExecutionState.FAILED, ExecutionState.CANCELLED},
+    ExecutionState.PLAN_READY: {ExecutionState.WAITING_FOR_APPROVAL, ExecutionState.FAILED, ExecutionState.CANCELLED, ExecutionState.COMPLETED},  # COMPLETED for PLAN_ONLY
+    ExecutionState.WAITING_FOR_APPROVAL: {ExecutionState.APPROVED, ExecutionState.BLOCKED, ExecutionState.CANCELLED},
+    ExecutionState.APPROVED: {ExecutionState.EXECUTING, ExecutionState.CANCELLED},
+    ExecutionState.EXECUTING: {ExecutionState.OBSERVING, ExecutionState.FAILED, ExecutionState.BLOCKED, ExecutionState.REQUIRES_RECONCILIATION},
+    ExecutionState.OBSERVING: {ExecutionState.VALIDATING, ExecutionState.FAILED, ExecutionState.BLOCKED},
+    ExecutionState.VALIDATING: {ExecutionState.COMPLETED, ExecutionState.FAILED},
+    ExecutionState.COMPLETED: set(),  # Terminal
+    ExecutionState.FAILED: {ExecutionState.DRAFT},  # Can retry from DRAFT
+    ExecutionState.BLOCKED: {ExecutionState.DRAFT, ExecutionState.CANCELLED},
+    ExecutionState.CANCELLED: set(),  # Terminal
+    ExecutionState.REQUIRES_RECONCILIATION: {ExecutionState.OBSERVING, ExecutionState.CANCELLED},
+}
+
+
+def can_transition(from_state: ExecutionState, to_state: ExecutionState) -> bool:
+    """Check if a state transition is legal."""
+    return to_state in VALID_TRANSITIONS.get(from_state, set())
+
+
+# ============================================================================
+# Resource Ownership Model
+# ============================================================================
+
+
+class TargetScope(str, Enum):
+    """Ownership scope for infrastructure resources."""
+    ISOLATED = "ISOLATED"    # Created solely for this run, disposable
+    SHARED = "SHARED"        # Shared infrastructure (existing clusters, DBs)
+    EXTERNAL = "EXTERNAL"    # External/customer resources
+    UNKNOWN = "UNKNOWN"      # Ownership cannot be determined
+
+
+@dataclass
+class ResourceOwnership:
+    """Explicit resource ownership metadata."""
+    managed_by: str = "INFRA_AGAIN"
+    created_by_run_id: str = ""
+    ephemeral: bool = True
+    target_scope: TargetScope = TargetScope.ISOLATED
+
+    def is_auto_destroy_allowed(self, current_run_id: str) -> bool:
+        """AUTO destroy allowed only for owned, ephemeral, isolated resources from the same run."""
+        return (
+            self.managed_by == "INFRA_AGAIN"
+            and self.created_by_run_id == current_run_id
+            and self.ephemeral is True
+            and self.target_scope == TargetScope.ISOLATED
+        )
+
+
+@dataclass
+class OwnedResource:
+    """A resource with ownership tracking."""
+    resource_id: str
+    resource_type: str
+    provider: str
+    ownership: ResourceOwnership = field(default_factory=ResourceOwnership)
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    state: dict[str, Any] = field(default_factory=dict)
 
 
 # ============================================================================
