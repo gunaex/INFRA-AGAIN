@@ -1,7 +1,7 @@
 # INFRA-AGAIN Acceptance V4.1 — Provider Intelligence Hardening + Freeze
 
 **Date:** 2026-08-10  
-**Baseline:** `8288b60` → Final: (TBD after commit)  
+**Baseline:** `8288b60` → Final: `648ed152000579a399faa65c2a314367716a506c`  
 **V4 Runner:** `scripts/run-acceptance-v4.sh`
 
 ## A. Baseline
@@ -9,9 +9,8 @@
 | Item | Value |
 |---|---|
 | Starting SHA | `8288b602933f0bb964bcb7ccbc0551bf993d917b` |
-| Remote SHA | `8288b602933f0bb964bcb7ccbc0551bf993d917b` (matched) |
-| Branch | `main` |
-| Working tree | clean → modified for Phase 4.1 |
+| Final SHA | `648ed152000579a399faa65c2a314367716a506c` |
+| Remote SHA | `648ed152000579a399faa65c2a314367716a506c` (matched) |
 
 ## B. Phase 3 Regression
 
@@ -180,6 +179,8 @@ Phase 4.1 meets all freeze criteria:
 
 | Item | Status |
 |---|---|
-| Changes | Modified: catalog.py, api/__init__.py, orchestrator.py, Dockerfile, acceptance scripts, evidence docs |
-| Commit | Pending |
-| Push | Pending |
+| Commit SHA | `648ed152000579a399faa65c2a314367716a506c` |
+| Push result | Pushed to origin/main |
+| Remote SHA match | ✅ `648ed15` == `648ed15` |
+| Message | `fix: harden and freeze Provider Intelligence runtime (Phase 4.1)` |
+| Files changed | 8 files, +966/-60 |
