@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
+import InfraPulsePage from './features/infra-pulse/InfraPulsePage';
 
-type View = 'dashboard' | 'plan' | 'run' | 'providers';
+type View = 'dashboard' | 'plan' | 'run' | 'providers' | 'pulse';
 
 interface Target {
   target_type: string; name: string; provider: string; platform: string;
@@ -253,6 +254,7 @@ export default function App() {
     { key: 'plan', label: '📐 Plan Review' },
     { key: 'run', label: '🔍 Run Detail' },
     { key: 'providers', label: '🧠 Provider Intel' },
+    { key: 'pulse', label: '💠 Infra Pulse' },
   ];
 
   return <div>
@@ -266,5 +268,6 @@ export default function App() {
     {view === 'plan' && <PlanReview />}
     {view === 'run' && <RunDetail />}
     {view === 'providers' && <ProviderIntel />}
+    {view === 'pulse' && <InfraPulsePage />}
   </div>;
 }

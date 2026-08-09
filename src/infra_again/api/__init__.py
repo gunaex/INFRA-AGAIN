@@ -414,3 +414,10 @@ async def list_snapshots():
     return {"snapshots": [{"provider": s.provider, "snapshotId": s.snapshot_id,
         "serviceCount": s.service_count, "checksum": s.checksum,
         "freshness": s.freshness.value} for s in catalog.get_snapshots()]}
+
+# ===========================================================================
+# Infra Pulse + Design Review API (Phase 5)
+# ===========================================================================
+
+from ..flow.api import register_flow_routes
+register_flow_routes(app)
