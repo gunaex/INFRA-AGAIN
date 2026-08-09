@@ -51,6 +51,14 @@ from ..core.domain import (
 from ..core.persistence import RunStore
 from ..providers.interface import ProviderAdapter
 from ..platforms.interface import PlatformAdapter
+from ..iac.engine import IaCEngine, IaCStage
+from ..iac.opentofu import OpenTofuEngine, extract_plan_info
+from ..iac.renderer import render_tofu_config
+from ..visualization.graph import ArchitectureGraph, GraphType
+from ..visualization.renderer import (
+    build_proposed_graph, build_planned_graph, build_observed_graph,
+    build_diff, render_mermaid_before_after,
+)
 
 
 class ActionPolicy(str, Enum):
@@ -207,18 +215,20 @@ class OrchestrationContext:
 
 
 class ExecutionOrchestrator:
-    """Orchestrator with SQLite persistence, ownership, state machine."""
+    """Orchestrator with SQLite persistence, ownership, state machine, IaC engine."""
 
     def __init__(
         self,
         provider_adapter: ProviderAdapter | None = None,
         platform_adapter: PlatformAdapter | None = None,
         store: RunStore | None = None,
+        iac_engine: IaCEngine | None = None,
     ):
         self.provider_adapter = provider_adapter
         self.platform_adapter = platform_adapter
         self.policy_engine = PolicyEngine()
         self.store = store or RunStore()
+        self.iac_engine = iac_engine
         self._ctx: OrchestrationContext | None = None
 
     # ------------------------------------------------------------------
@@ -280,6 +290,13 @@ class ExecutionOrchestrator:
             ctx.plan.correlation_id = request.correlationId
             ctx.plan.request_id = request.infrastructureRequestId
             self._persist_plan(ctx)
+
+            # Phase 2B: Generate proposed + planned architecture graphs
+            proposed_graph = build_proposed_graph(ctx.plan)
+            planned_graph = build_planned_graph(ctx.plan, target.mode)
+            self._persist_file(ctx, "architecture-proposed.json", proposed_graph.to_dict())
+            self._persist_file(ctx, "architecture-planned.json", planned_graph.to_dict())
+
             await self._transition(ctx, ExecutionState.PLAN_READY)
 
             if self.provider_adapter:
@@ -309,7 +326,11 @@ class ExecutionOrchestrator:
                         timestamp=datetime.now(timezone.utc))])
 
             await self._transition(ctx, ExecutionState.EXECUTING)
-            if self.provider_adapter:
+
+            # Phase 2B: OpenTofu IaC pipeline
+            if self.iac_engine and target.mode == ExecutionMode.SIMULATED:
+                await self._run_iac_pipeline(ctx, target)
+            elif self.provider_adapter:
                 ctx.change_set = await self.provider_adapter.apply(ctx.plan, target)
                 for change in (ctx.change_set.changes if ctx.change_set else []):
                     if change.action == ChangeAction.CREATE:
@@ -323,7 +344,9 @@ class ExecutionOrchestrator:
                         self.store.register_resource(resource)
             self._persist_file(ctx, "execution.json", {
                 "target": target.mode.value,
-                "change_summary": ctx.change_set.summary if ctx.change_set else "N/A"})
+                "change_summary": ctx.change_set.summary if ctx.change_set else "N/A",
+                "iac_stage": self.store.get_run(ctx.run_id).get("iac_stage", "") if self.store.get_run(ctx.run_id) else "",
+            })
 
             await self._transition(ctx, ExecutionState.OBSERVING)
             if self.provider_adapter:
@@ -350,6 +373,31 @@ class ExecutionOrchestrator:
                 if not all_match:
                     validation_failed = True
                     ctx.errors.append("VALIDATION FAIL: desired != observed")
+
+            # Phase 2B: Generate observed graph, diff, and Mermaid visualization
+            if ctx.plan:
+                obs_state = ctx.evidence.observed_resources[-1] if ctx.evidence.observed_resources else {}
+                obs_graph = build_observed_graph(
+                    obs_state, ctx.plan, ctx.evidence.validation_results,
+                    target.mode, target.endpoint or "")
+                planned_for_diff = build_planned_graph(ctx.plan, target.mode)
+                diff_result = build_diff(planned_for_diff, obs_graph)
+                self._persist_file(ctx, "architecture-observed.json", obs_graph.to_dict())
+                self._persist_file(ctx, "architecture-diff.json", diff_result.to_dict())
+
+                mermaid = render_mermaid_before_after(
+                    planned_for_diff, obs_graph, diff_result,
+                    run_id=ctx.run_id,
+                    correlation_id=ctx.request.correlationId if ctx.request else "")
+                # Persist Mermaid as evidence text file
+                evidence_path = Path(EVIDENCE_DIR) / ctx.run_id
+                evidence_path.mkdir(parents=True, exist_ok=True)
+                (evidence_path / "architecture-before-after.md").write_text(mermaid)
+                self.store.add_evidence(run_id=ctx.run_id, evidence_type="FILE",
+                    source="infrastructure-again",
+                    reference=str(evidence_path / "architecture-before-after.md"),
+                    summary="Before/After architecture visualization",
+                    data={"format": "mermaid"})
 
             # Validation failure → FAILED state, not SUCCESS
             if validation_failed or ctx.errors:
@@ -444,11 +492,18 @@ class ExecutionOrchestrator:
     def load_run(self, run_id: str) -> OrchestrationContext | None:
         ctx = self._load_context(run_id)
         if ctx:
-            # Safety: if restarting during EXECUTING, mark for reconciliation
+            run = self.store.get_run(run_id) or {}
+            iac_stage = run.get("iac_stage", "")
+            # Safety: restart during IaC apply → reconciliation
             if ctx.state == ExecutionState.EXECUTING:
                 self.store.transition_state(
                     run_id, ExecutionState.REQUIRES_RECONCILIATION,
                     "Restarted while EXECUTING — manual reconciliation required")
+                ctx.state = ExecutionState.REQUIRES_RECONCILIATION
+            elif iac_stage == IaCStage.IAC_APPLYING.value:
+                self.store.transition_state(
+                    run_id, ExecutionState.REQUIRES_RECONCILIATION,
+                    "Restarted during IAC_APPLYING — manual reconciliation required")
                 ctx.state = ExecutionState.REQUIRES_RECONCILIATION
             # Safety: if request cannot be reconstructed, require reconciliation
             if ctx.request is None and ctx.state not in (
@@ -583,6 +638,120 @@ class ExecutionOrchestrator:
         self._persist_file(ctx, "final-result.json", json.loads(result_json))
 
         return result
+
+    # ------------------------------------------------------------------
+    # IaC Pipeline (Phase 2B)
+    # ------------------------------------------------------------------
+
+    async def _run_iac_pipeline(self, ctx: OrchestrationContext, target: ExecutionTarget) -> None:
+        """Run the full OpenTofu pipeline: render → fmt → init → validate → plan → apply."""
+        if not self.iac_engine or not ctx.plan:
+            return
+
+        run = self.store.get_run(ctx.run_id) or {}
+        engine = self.iac_engine
+        iac_dir = Path(EVIDENCE_DIR) / ctx.run_id / "iac"
+        iac_dir.mkdir(parents=True, exist_ok=True)
+
+        # Record engine info
+        version = await engine.probe()
+        self.store.update_run(ctx.run_id, iac_engine=engine.engine_name, iac_version=version or "",
+                              iac_working_dir=str(iac_dir))
+
+        # 1. Render HCL
+        endpoint = target.endpoint or "http://localhost:4566"
+        checksum = render_tofu_config(ctx.plan, iac_dir, run_id=ctx.run_id,
+                                       correlation_id=ctx.request.correlationId if ctx.request else "",
+                                       endpoint=endpoint)
+        self.store.update_run(ctx.run_id, iac_stage=IaCStage.IAC_RENDERED.value, iac_checksum=checksum)
+        # Persist generated file contents (not Path objects)
+        for tf_file in iac_dir.glob("*.tf"):
+            self._persist_file(ctx, f"iac/{tf_file.name}", {"content": tf_file.read_text()})
+
+        # 2. tofu fmt (auto-format)
+        fmt_result = await engine.fmt(iac_dir)
+        self._persist_file(ctx, "tofu-fmt.json", {"exit_code": fmt_result.exit_code, "stderr": fmt_result.stderr})
+
+        # 3. tofu init
+        init_result = await engine.init(iac_dir)
+        if not init_result.success:
+            ctx.errors.append(f"tofu init failed: {init_result.stderr}")
+            await self._transition(ctx, ExecutionState.FAILED, "tofu init failed")
+            return
+        self.store.update_run(ctx.run_id, iac_stage=IaCStage.IAC_INITIALIZED.value)
+        self._persist_file(ctx, "tofu-init.json", {"exit_code": init_result.exit_code, "stdout": init_result.stdout[:500]})
+
+        # 4. tofu validate
+        val_result = await engine.validate(iac_dir)
+        if not val_result.success:
+            ctx.errors.append(f"tofu validate failed: {val_result.stderr}")
+            await self._transition(ctx, ExecutionState.FAILED, "tofu validate failed")
+            return
+        self.store.update_run(ctx.run_id, iac_stage=IaCStage.IAC_VALIDATED.value)
+        self._persist_file(ctx, "tofu-validate.json", {"exit_code": val_result.exit_code})
+
+        # 5. tofu plan
+        plan_path = iac_dir / "tfplan"
+        plan_result = await engine.plan(iac_dir, plan_path)
+        if not plan_result.success:
+            ctx.errors.append(f"tofu plan failed: {plan_result.stderr}")
+            await self._transition(ctx, ExecutionState.FAILED, "tofu plan failed")
+            return
+
+        # Extract plan info
+        plan_json = await engine.show(plan_path)
+        plan_info = extract_plan_info(plan_json)
+        self.store.update_run(ctx.run_id, iac_stage=IaCStage.IAC_PLANNED.value,
+                              iac_plan_checksum=plan_info.plan_checksum)
+        self._persist_file(ctx, "tofu-plan.json", plan_json or {})
+        self._persist_file(ctx, "tofu-plan.txt", {"stdout": plan_result.stdout[:2000]})
+
+        # 6. Policy gate before apply
+        self.store.update_run(ctx.run_id, iac_stage=IaCStage.WAITING_FOR_APPROVAL.value)
+        plan_decision = self.policy_engine.evaluate("apply", target)
+        if plan_decision.policy in (ActionPolicy.BLOCK, ActionPolicy.ASK):
+            await self._transition(ctx, ExecutionState.BLOCKED, plan_decision.reason)
+            return
+
+        # 7. tofu apply
+        self.store.update_run(ctx.run_id, iac_stage=IaCStage.IAC_APPLYING.value)
+        apply_result = await engine.apply(iac_dir, plan_path)
+        if not apply_result.success:
+            ctx.errors.append(f"tofu apply failed (exit={apply_result.exit_code}): {apply_result.stderr[:500]}")
+            await self._transition(ctx, ExecutionState.FAILED, "tofu apply failed")
+            return
+        self.store.update_run(ctx.run_id, iac_stage=IaCStage.IAC_APPLIED.value)
+        self._persist_file(ctx, "tofu-apply.json", {"exit_code": apply_result.exit_code, "stdout": apply_result.stdout[:500]})
+
+        # 8. Persist state reference
+        state_ref = engine.state_reference(iac_dir)
+        self.store.update_run(ctx.run_id, iac_state_reference=state_ref)
+
+        # 9. Register owned resources from plan
+        for change in plan_info.resource_changes:
+            if "create" in change.get("change", {}).get("actions", []):
+                addr = change.get("address", "unknown")
+                rtype = change.get("type", "unknown")
+                resource = OwnedResource(
+                    resource_id=addr, resource_type=rtype, provider=target.provider.value,
+                    ownership=ResourceOwnership(
+                        managed_by="INFRA_AGAIN", created_by_run_id=ctx.run_id,
+                        ephemeral=True, target_scope=TargetScope.ISOLATED))
+                ctx.owned_resources.append(resource)
+                self.store.register_resource(resource)
+
+        # 10. Build change set from plan
+        from ..core.domain import ChangeAction, ChangeItem
+        changes = []
+        for c in plan_info.resource_changes:
+            actions = c.get("change", {}).get("actions", [])
+            if "create" in actions:
+                changes.append(ChangeItem(action=ChangeAction.CREATE,
+                    resource_type=c.get("type", ""), resource_id=c.get("address", "")))
+            elif "delete" in actions:
+                changes.append(ChangeItem(action=ChangeAction.DELETE,
+                    resource_type=c.get("type", ""), resource_id=c.get("address", ""), is_destructive=True))
+        ctx.change_set = ChangeSet(changes=changes, provider=target.provider, platform=target.platform, iac_tool="OPENTOFU")
 
     # ------------------------------------------------------------------
     # Persistence
