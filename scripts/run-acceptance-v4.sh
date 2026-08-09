@@ -195,58 +195,35 @@ s3.deprecated = False
 section "12. Catalog Diff: SERVICE_ADDED, SERVICE_REMOVED, SCHEMA_CHANGED, DEPRECATED"
 "$PYTHON" -c "
 from infra_again.intelligence.catalog import (
-    ProviderService, CatalogSnapshot, CatalogLifecycle, get_catalog, DiffAction
+    ProviderService, CatalogSnapshot, CatalogLifecycle, ProviderCatalog
 )
 import copy
 
-# Build two snapshots for diff
+# Build INPUT fixtures only — NO manual diff implementation
 s3_a = ProviderService(provider='T', service_id='s3', display_name='S3', lifecycle=CatalogLifecycle.VERIFIED, execution_support=['SIMULATED'])
 rds_a = ProviderService(provider='T', service_id='rds', display_name='RDS', lifecycle=CatalogLifecycle.CAPABILITY_MAPPED, execution_support=['PLAN_ONLY'])
-
 snap_a = CatalogSnapshot(provider='T', snapshot_id='snap-a')
 snap_a.services = [s3_a, rds_a]
 snap_a.compute_checksum()
 
-# B = added lambda, removed rds, deprecated s3
+# B: s3 changed (deprecated → schema changed), lambda added, rds removed
 s3_b = copy.deepcopy(s3_a)
 s3_b.deprecated = True
-s3_b.compute_service_checksum()
 lambda_b = ProviderService(provider='T', service_id='lambda', display_name='Lambda', lifecycle=CatalogLifecycle.DISCOVERED)
-
 snap_b = CatalogSnapshot(provider='T', snapshot_id='snap-b')
 snap_b.services = [s3_b, lambda_b]
 snap_b.compute_checksum()
 
-c = get_catalog()
-diff = c.diff_snapshots('T', snap_a.snapshot_id, snap_b.snapshot_id)
-
-# But diff_snapshots uses internal _snapshots — use a direct diff approach
-# Build a manual diff
-from infra_again.intelligence.catalog import CatalogDiff
-diff = CatalogDiff(provider='T', previous_snapshot_id='snap-a', current_snapshot_id='snap-b')
-a_ids = {s.service_id for s in snap_a.services}
-b_ids = {s.service_id for s in snap_b.services}
-for sid in b_ids - a_ids:
-    diff.changes.append({'action': 'SERVICE_ADDED', 'serviceId': sid})
-for sid in a_ids - b_ids:
-    diff.changes.append({'action': 'SERVICE_REMOVED', 'serviceId': sid})
-for sb in snap_b.services:
-    sa = next((s for s in snap_a.services if s.service_id == sb.service_id), None)
-    if sa:
-        if sb.deprecated and not sa.deprecated:
-            diff.changes.append({'action': 'DEPRECATED', 'serviceId': sb.service_id})
-        cs_a = sa.compute_service_checksum()
-        cs_b = sb.compute_service_checksum()
-        if cs_a != cs_b:
-            diff.changes.append({'action': 'SCHEMA_CHANGED', 'serviceId': sb.service_id})
+# Exercise PRODUCTION implementation only
+diff = ProviderCatalog.compute_diff('T', snap_a, snap_b)
 
 actions = {c['action'] for c in diff.changes}
 assert 'SERVICE_ADDED' in actions, f'Missing SERVICE_ADDED in {actions}'
 assert 'SERVICE_REMOVED' in actions, f'Missing SERVICE_REMOVED in {actions}'
 assert 'DEPRECATED' in actions, f'Missing DEPRECATED in {actions}'
 assert 'SCHEMA_CHANGED' in actions, f'Missing SCHEMA_CHANGED in {actions}'
-print(f'OK: diff actions={actions}, total changes={len(diff.changes)}')
-" > "$TMPDIR/diff.txt" 2>&1 && req_pass "Catalog diff: SERVICE_ADDED, REMOVED, SCHEMA_CHANGED, DEPRECATED" || { cat "$TMPDIR/diff.txt"; req_fail "Catalog diff"; }
+print(f'OK: production compute_diff -> {actions} ({len(diff.changes)} changes)')
+" > "$TMPDIR/diff.txt" 2>&1 && req_pass "Catalog diff: production compute_diff() verified" || { cat "$TMPDIR/diff.txt"; req_fail "Catalog diff"; }
 
 # ===========================================================================
 section "13. Persistence: Restart Durability"
@@ -369,12 +346,29 @@ else
 fi
 
 # ===========================================================================
-section "18. Frontend Build"
+section "18. Frontend Build (fresh)"
 if [ -d ui ]; then
-  (cd ui && npm ci --silent 2>&1 | tail -1) || true
-  (cd ui && npx vite build 2>&1 | tail -1) || true
-  if [ -f ui/dist/index.html ]; then req_pass "Frontend build: OK"; else req_fail "Frontend: dist/index.html missing"; fi
-  grep -q "VITE_API_BASE_URL\|apiBaseUrl" ui/src/App.tsx 2>/dev/null && req_pass "UI API URL config found" || true
+  # Remove stale dist to prove fresh build
+  rm -rf ui/dist
+  echo "  Removed ui/dist/ for clean build"
+
+  set +e
+  (cd ui && npm ci --silent 2>&1)
+  NPM_CI_EXIT=$?
+  (cd ui && npx vite build 2>&1)
+  VITE_EXIT=$?
+  set -e
+
+  if [ "$NPM_CI_EXIT" -eq 0 ]; then req_pass "npm ci: exit 0"; else req_fail "npm ci: exit $NPM_CI_EXIT"; fi
+  if [ "$VITE_EXIT" -eq 0 ]; then req_pass "vite build: exit 0"; else req_fail "vite build: exit $VITE_EXIT"; fi
+  if [ -f ui/dist/index.html ]; then req_pass "dist/index.html exists (fresh)"; else req_fail "dist/index.html missing"; fi
+
+  # npm test optional
+  if grep -q '"test"' ui/package.json 2>/dev/null; then
+    echo "  UI_TEST_SCRIPT = NOT_CONFIGURED (test script exists but not executed in acceptance)"
+  else
+    echo "  UI_TEST_SCRIPT = NOT_CONFIGURED"
+  fi
 else
   req_skip "No ui/ directory"
 fi

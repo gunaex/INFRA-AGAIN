@@ -42,14 +42,17 @@
 | 36 | Stale planner warning | INTEGRATION | STALE snapshot → catalogFreshness=STALE in planner output | PASS |
 | 37 | Deprecated: comparison visibility | UNIT | deprecated=True → comparison output shows deprecated | PASS |
 | 38 | Deprecated: planner exclusion | INTEGRATION | deprecated S3 + SIMULATED → DEPRECATED_RESOURCE, not selected | PASS |
-| 39 | Catalog diff: SERVICE_ADDED | UNIT | Lambda added to snapshot → SERVICE_ADDED in diff | PASS |
-| 40 | Catalog diff: SERVICE_REMOVED | UNIT | RDS removed from snapshot → SERVICE_REMOVED in diff | PASS |
-| 41 | Catalog diff: SCHEMA_CHANGED | UNIT | Service metadata change → SCHEMA_CHANGED with checksums | PASS |
-| 42 | Catalog diff: DEPRECATED | UNIT | deprecated flag change → DEPRECATED in diff | PASS |
-| 43 | Required/optional accounting | RUNTIME | 25 REQUIRED PASS, 0 FAIL, 0 SKIP; optional separated | PASS |
+| 39 | Catalog diff: SERVICE_ADDED | INTEGRATION | `ProviderCatalog.compute_diff()` production entry point | PASS |
+| 40 | Catalog diff: SERVICE_REMOVED | INTEGRATION | `ProviderCatalog.compute_diff()` production entry point | PASS |
+| 41 | Catalog diff: SCHEMA_CHANGED | INTEGRATION | `ProviderCatalog.compute_diff()` production entry point | PASS |
+| 42 | Catalog diff: DEPRECATED | INTEGRATION | `ProviderCatalog.compute_diff()` production entry point | PASS |
+| 43 | Required/optional accounting | RUNTIME | 27 REQUIRED PASS, 0 FAIL, 0 SKIP; optional separated | PASS |
 | 44 | Docker real build (not cached) | RUNTIME | `docker build -t infra-again:v4-acceptance .` exit 0 | PASS |
 | 45 | Docker real run + health | RUNTIME | container health 200, providers API 2 | PASS |
-| 46 | LIVE_OFFICIAL_SYNC | N/A | NOT_EXECUTED (internet source fetch not attempted) | NOT_EXECUTED |
+| 46 | Frontend fresh npm ci | RUNTIME | `npm ci` exit 0 (dist removed before) | PASS |
+| 47 | Frontend fresh vite build | RUNTIME | `vite build` exit 0 (dist removed before → new dist/index.html) | PASS |
+| 48 | No manual diff in acceptance | STATIC | Audit: 0 occurrences of `CatalogDiff(` or manual diff.append | PASS |
+| 49 | LIVE_OFFICIAL_SYNC | N/A | NOT_EXECUTED (internet source fetch not attempted) | NOT_EXECUTED |
 | 47 | BROWSER_E2E | N/A | NOT_EXECUTED (no browser automation) | NOT_EXECUTED |
 | 48 | FLY_REMOTE | N/A | NOT_EXECUTED (Fly deploy not performed) | NOT_EXECUTED |
 | 49 | CLOUDFLARE_REMOTE | N/A | NOT_EXECUTED (Cloudflare deploy not performed) | NOT_EXECUTED |
@@ -64,8 +67,9 @@
 
 ## Summary
 
-- RUNTIME verified: 27 claims
-- INTEGRATION verified: 11 claims
+- RUNTIME verified: 29 claims
+- INTEGRATION verified: 12 claims
 - UNIT verified: 7 claims
+- STATIC (audit): 1 claim
 - NOT_EXECUTED (optional): 4 claims
 - No claims are STATIC_ONLY

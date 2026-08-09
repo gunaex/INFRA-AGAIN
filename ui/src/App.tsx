@@ -25,7 +25,6 @@ interface ArchGraph { graph_type: string; nodes: ArchNode[]; edges: ArchEdge[]; 
 
 interface ArchDiff { entries: Array<{node_id: string; action: string; detail: string}>; summary: string; match_count: number; missing_count: number; unexpected_count: number; }
 
-declare const import.meta: { env: { VITE_API_URL?: string } } | undefined;
 const API = (typeof import.meta !== 'undefined' && (import.meta as any)?.env?.VITE_API_URL) || '';
 
 async function fetchJson(url: string) { const r = await fetch(API + url); return r.json(); }

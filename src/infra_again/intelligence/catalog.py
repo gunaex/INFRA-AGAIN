@@ -519,28 +519,50 @@ class ProviderCatalog:
     def diff_snapshots(self, provider: str, prev_id: str, curr_id: str) -> CatalogDiff:
         prev = next((s for s in self._snapshots if s.snapshot_id == prev_id), None)
         curr = next((s for s in self._snapshots if s.snapshot_id == curr_id), None)
-        diff = CatalogDiff(provider=provider, previous_snapshot_id=prev_id, current_snapshot_id=curr_id)
-        if prev and curr:
-            prev_ids = {s.service_id for s in prev.services}
-            curr_ids = {s.service_id for s in curr.services}
-            for sid in curr_ids - prev_ids:
-                diff.changes.append({"action": "SERVICE_ADDED", "serviceId": sid})
-            for sid in prev_ids - curr_ids:
-                diff.changes.append({"action": "SERVICE_REMOVED", "serviceId": sid})
-            # Check for deprecation changes and schema changes
-            for s in curr.services:
-                ps = next((ps for ps in prev.services if ps.service_id == s.service_id), None)
-                if ps:
-                    if s.deprecated and not ps.deprecated:
-                        diff.changes.append({"action": "DEPRECATED", "serviceId": s.service_id})
-                    if not s.deprecated and ps.deprecated:
-                        diff.changes.append({"action": "RETIRED", "serviceId": s.service_id})
-                    # SCHEMA_CHANGED: service exists in both but metadata changed
-                    cs_prev = ps.compute_service_checksum()
-                    cs_curr = s.compute_service_checksum()
-                    if cs_prev != cs_curr:
-                        diff.changes.append({"action": "SCHEMA_CHANGED", "serviceId": s.service_id,
-                                              "previousChecksum": cs_prev, "currentChecksum": cs_curr})
+        return ProviderCatalog.compute_diff(provider, prev, curr)
+
+    @staticmethod
+    def compute_diff(
+        provider: str,
+        prev: CatalogSnapshot | None,
+        curr: CatalogSnapshot | None,
+    ) -> CatalogDiff:
+        """Production diff: compare two catalog snapshots.
+
+        This is the single canonical implementation — no duplicate algorithm
+        exists in acceptance tests.
+        """
+        diff = CatalogDiff(
+            provider=provider,
+            previous_snapshot_id=prev.snapshot_id if prev else "",
+            current_snapshot_id=curr.snapshot_id if curr else "",
+        )
+        if not prev or not curr:
+            return diff
+
+        prev_ids = {s.service_id for s in prev.services}
+        curr_ids = {s.service_id for s in curr.services}
+
+        for sid in curr_ids - prev_ids:
+            diff.changes.append({"action": "SERVICE_ADDED", "serviceId": sid})
+        for sid in prev_ids - curr_ids:
+            diff.changes.append({"action": "SERVICE_REMOVED", "serviceId": sid})
+
+        for s in curr.services:
+            ps = next((ps for ps in prev.services if ps.service_id == s.service_id), None)
+            if ps:
+                if s.deprecated and not ps.deprecated:
+                    diff.changes.append({"action": "DEPRECATED", "serviceId": s.service_id})
+                if not s.deprecated and ps.deprecated:
+                    diff.changes.append({"action": "RETIRED", "serviceId": s.service_id})
+                cs_prev = ps.compute_service_checksum()
+                cs_curr = s.compute_service_checksum()
+                if cs_prev != cs_curr:
+                    diff.changes.append({
+                        "action": "SCHEMA_CHANGED", "serviceId": s.service_id,
+                        "previousChecksum": cs_prev, "currentChecksum": cs_curr,
+                    })
+
         return diff
 
     # ------------------------------------------------------------------
