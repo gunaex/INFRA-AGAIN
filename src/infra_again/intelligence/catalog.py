@@ -94,7 +94,11 @@ class ProviderService:
     resource_types: list[str] = field(default_factory=list)
     capabilities: list[str] = field(default_factory=list)
     source_type: SourceType = SourceType.STATIC_SEED
-    source_uri: str = ""
+    source_reference: str = ""
+    source_version: str = "1.0"
+    retrieved_at: str = ""
+    verified_at: str = ""
+    service_checksum: str = ""
     deprecated: bool = False
     deprecated_at: str = ""
     replaced_by: str = ""
@@ -117,12 +121,87 @@ class ProviderService:
             "executionSupport": self.execution_support,
             "regions": self.regions, "resourceTypes": self.resource_types,
             "capabilities": self.capabilities,
-            "sourceType": self.source_type.value, "sourceUri": self.source_uri,
+            "sourceType": self.source_type.value, "sourceReference": self.source_reference,
+            "sourceVersion": self.source_version,
+            "retrievedAt": self.retrieved_at, "verifiedAt": self.verified_at,
+            "serviceChecksum": self.service_checksum,
             "deprecated": self.deprecated, "deprecatedAt": self.deprecated_at,
             "replacedBy": self.replaced_by, "notes": self.notes,
             "isExecutable": self.is_executable,
             "isSafeToExecute": self.is_safe_to_execute,
         }
+
+
+    def compute_service_checksum(self) -> str:
+        """Compute a deterministic checksum for this single service."""
+        data = json.dumps(self.to_dict(), sort_keys=True)
+        return hashlib.sha256(data.encode()).hexdigest()[:16]
+
+
+class SyncMode(str, Enum):
+    LOCAL_REFRESH = "LOCAL_REFRESH"
+    LIVE_OFFICIAL_SYNC = "LIVE_OFFICIAL_SYNC"
+
+
+# ============================================================================
+# Provider Catalog Source Adapter (Phase 4.1)
+# ============================================================================
+
+
+class ProviderCatalogSource:
+    """ABC for provider catalog data sources.
+
+    Explicit about STATIC_FIXTURE vs OFFICIAL_LIVE.
+    No hidden fallback.
+    """
+
+    source_kind: str = "STATIC_FIXTURE"  # STATIC_FIXTURE | OFFICIAL_LIVE
+
+    async def fetch_services(self) -> list[dict[str, Any]]:
+        raise NotImplementedError
+
+    async def fetch_service_schema(self, service_id: str) -> dict[str, Any] | None:
+        return None
+
+
+class StaticSeedSource(ProviderCatalogSource):
+    """STATIC_FIXTURE source — seeded at build time."""
+    source_kind = "STATIC_FIXTURE"
+
+    def __init__(self, services: list[ProviderService]):
+        self._services = services
+
+    async def fetch_services(self) -> list[dict[str, Any]]:
+        return [s.to_dict() for s in self._services]
+
+
+class AwsCatalogSource(ProviderCatalogSource):
+    """AWS official source adapter.
+
+    Currently STATIC_FIXTURE — will become OFFICIAL_LIVE when
+    actual CloudFormation resource spec retrieval is implemented.
+    """
+    source_kind = "STATIC_FIXTURE"
+
+    def __init__(self, services: list[ProviderService]):
+        self._services = services
+
+    async def fetch_services(self) -> list[dict[str, Any]]:
+        return [s.to_dict() for s in self._services]
+
+
+class GcpCatalogSource(ProviderCatalogSource):
+    """GCP official source adapter.
+
+    Currently STATIC_FIXTURE.
+    """
+    source_kind = "STATIC_FIXTURE"
+
+    def __init__(self, services: list[ProviderService]):
+        self._services = services
+
+    async def fetch_services(self) -> list[dict[str, Any]]:
+        return [s.to_dict() for s in self._services]
 
 
 # ============================================================================
@@ -390,6 +469,9 @@ class ProviderCatalog:
         for m in mappings:
             svc = self.get_service(m.provider, m.service_id)
             fit = "FULL" if m.confidence >= 0.8 else "PARTIAL"
+            # Filter by execution_mode if provided
+            if execution_mode and execution_mode not in m.execution_support:
+                fit = "PLAN_ONLY" if "PLAN_ONLY" in m.execution_support else "UNSUPPORTED"
             results.append({
                 "provider": m.provider, "serviceId": m.service_id,
                 "resourceType": m.resource_type, "fit": fit,
@@ -411,7 +493,177 @@ class ProviderCatalog:
                 diff.changes.append({"action": "SERVICE_ADDED", "serviceId": sid})
             for sid in prev_ids - curr_ids:
                 diff.changes.append({"action": "SERVICE_REMOVED", "serviceId": sid})
+            # Check for deprecation changes
+            for s in curr.services:
+                ps = next((ps for ps in prev.services if ps.service_id == s.service_id), None)
+                if ps and s.deprecated and not ps.deprecated:
+                    diff.changes.append({"action": "DEPRECATED", "serviceId": s.service_id})
+                if ps and not s.deprecated and ps.deprecated:
+                    diff.changes.append({"action": "RETIRED", "serviceId": s.service_id})
         return diff
+
+    # ------------------------------------------------------------------
+    # Persistence (Phase 4.1)
+    # ------------------------------------------------------------------
+
+    def persist(self, db_path: str = ".ai/infra-again.db") -> bool:
+        """Persist catalog state to SQLite for restart durability."""
+        import sqlite3
+        conn = sqlite3.connect(str(db_path))
+        try:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS catalog_services (
+                    key TEXT PRIMARY KEY,
+                    provider TEXT, service_id TEXT, display_name TEXT,
+                    category TEXT, lifecycle TEXT,
+                    execution_support TEXT,  -- JSON array
+                    regions TEXT, resource_types TEXT, capabilities TEXT,
+                    source_type TEXT, source_reference TEXT,
+                    source_version TEXT, retrieved_at TEXT, verified_at TEXT,
+                    service_checksum TEXT,
+                    deprecated INTEGER, deprecated_at TEXT, replaced_by TEXT,
+                    notes TEXT
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS catalog_snapshots (
+                    snapshot_id TEXT PRIMARY KEY,
+                    provider TEXT, retrieved_at TEXT,
+                    source_version TEXT, checksum TEXT,
+                    service_count INTEGER, freshness TEXT,
+                    services_json TEXT  -- full serialization for restart
+                )
+            """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS catalog_mappings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    capability TEXT, provider TEXT, service_id TEXT,
+                    resource_type TEXT, lifecycle TEXT,
+                    execution_support TEXT, confidence REAL,
+                    selection_reason TEXT
+                )
+            """)
+            # Upsert services
+            for s in self._services.values():
+                conn.execute("""
+                    INSERT OR REPLACE INTO catalog_services VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """, (
+                    f"{s.provider}:{s.service_id}", s.provider, s.service_id, s.display_name,
+                    s.category, s.lifecycle.value,
+                    json.dumps(s.execution_support),
+                    json.dumps(s.regions), json.dumps(s.resource_types), json.dumps(s.capabilities),
+                    s.source_type.value, s.source_reference,
+                    s.source_version, s.retrieved_at, s.verified_at,
+                    s.service_checksum,
+                    1 if s.deprecated else 0, s.deprecated_at, s.replaced_by,
+                    s.notes,
+                ))
+            # Upsert snapshots
+            for snap in self._snapshots:
+                conn.execute("""
+                    INSERT OR REPLACE INTO catalog_snapshots VALUES (?,?,?,?,?,?,?,?)
+                """, (
+                    snap.snapshot_id, snap.provider, snap.retrieved_at,
+                    snap.source_version, snap.checksum,
+                    snap.service_count, snap.freshness.value,
+                    json.dumps([s.to_dict() for s in snap.services], sort_keys=True),
+                ))
+            # Upsert mappings
+            conn.execute("DELETE FROM catalog_mappings")
+            for m in self._mappings:
+                conn.execute("""
+                    INSERT INTO catalog_mappings
+                    (capability, provider, service_id, resource_type, lifecycle,
+                     execution_support, confidence, selection_reason)
+                    VALUES (?,?,?,?,?,?,?,?)
+                """, (
+                    m.capability, m.provider, m.service_id, m.resource_type,
+                    m.lifecycle.value, json.dumps(m.execution_support),
+                    m.confidence, m.selection_reason,
+                ))
+            conn.commit()
+            return True
+        except Exception as e:
+            return False
+        finally:
+            conn.close()
+
+    @classmethod
+    def load_persisted(cls, db_path: str = ".ai/infra-again.db") -> "ProviderCatalog | None":
+        """Load catalog from SQLite. Returns None if no persisted state exists."""
+        import sqlite3, os
+        if not os.path.exists(db_path):
+            return None
+        try:
+            conn = sqlite3.connect(str(db_path))
+            # Check if catalog tables exist
+            tables = conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='catalog_services'"
+            ).fetchall()
+            if not tables:
+                conn.close()
+                return None
+
+            catalog = cls.__new__(cls)
+            catalog._services = {}
+            catalog._snapshots = []
+            catalog._mappings = []
+
+            # Load services
+            rows = conn.execute("SELECT * FROM catalog_services").fetchall()
+            for r in rows:
+                s = ProviderService(
+                    provider=r[1], service_id=r[2], display_name=r[3] or "",
+                    category=r[4] or "", lifecycle=CatalogLifecycle(r[5] if r[5] else "DISCOVERED"),
+                    execution_support=json.loads(r[6]) if r[6] else [],
+                    regions=json.loads(r[7]) if r[7] else [],
+                    resource_types=json.loads(r[8]) if r[8] else [],
+                    capabilities=json.loads(r[9]) if r[9] else [],
+                    source_type=SourceType(r[10]) if r[10] else SourceType.STATIC_SEED,
+                    source_reference=r[11] or "", source_version=r[12] or "1.0",
+                    retrieved_at=r[13] or "", verified_at=r[14] or "",
+                    service_checksum=r[15] or "",
+                    deprecated=bool(r[16]), deprecated_at=r[17] or "",
+                    replaced_by=r[18] or "", notes=r[19] or "",
+                )
+                catalog._services[f"{s.provider}:{s.service_id}"] = s
+
+            # Load snapshots
+            snap_rows = conn.execute("SELECT * FROM catalog_snapshots").fetchall()
+            for r in snap_rows:
+                snap = CatalogSnapshot(
+                    snapshot_id=r[0], provider=r[1] or "",
+                    retrieved_at=r[2] or "", source_version=r[3] or "1.0",
+                    checksum=r[4] or "", service_count=r[5] or 0,
+                    freshness=FreshnessStatus(r[6]) if r[6] else FreshnessStatus.UNKNOWN,
+                )
+                if r[7]:
+                    try:
+                        svc_dicts = json.loads(r[7])
+                        snap.services = [
+                            next((s for s in catalog._services.values()
+                                  if s.provider == d.get("provider") and s.service_id == d.get("serviceId")),
+                                 ProviderService(**{k: v for k, v in d.items() if k != "serviceChecksum"}))
+                            for d in svc_dicts
+                        ]
+                    except Exception:
+                        pass
+                catalog._snapshots.append(snap)
+
+            # Load mappings
+            map_rows = conn.execute("SELECT * FROM catalog_mappings").fetchall()
+            for r in map_rows:
+                catalog._mappings.append(CapabilityMapping(
+                    capability=r[1] or "", provider=r[2] or "", service_id=r[3] or "",
+                    resource_type=r[4] or "", lifecycle=CatalogLifecycle(r[5]) if r[5] else CatalogLifecycle.DISCOVERED,
+                    execution_support=json.loads(r[6]) if r[6] else [],
+                    confidence=r[7] or 0.0, selection_reason=r[8] or "",
+                ))
+
+            conn.close()
+            return catalog
+        except Exception:
+            return None
 
 
 # Global instance

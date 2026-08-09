@@ -17,3 +17,4 @@ venv/
 .terraform/
 .ai/infra-again.db
 .ai/infra-runs/
+.ai/acceptance/

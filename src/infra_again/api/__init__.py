@@ -354,8 +354,8 @@ async def get_provider_services(provider: str):
     return {"services": [s.to_dict() for s in catalog.get_services(provider.upper())]}
 
 
-@app.get("/api/v1/capabilities")
-async def list_capabilities():
+@app.get("/api/v1/intel/capabilities")
+async def list_intel_capabilities():
     from ..intelligence.catalog import CapabilityCategory
     return {"capabilities": [{"id": c.value, "name": c.name.replace("_"," ").title()} for c in CapabilityCategory]}
 
@@ -389,13 +389,23 @@ async def catalog_status():
 
 
 @app.post("/api/v1/catalog/sync")
-async def sync_catalog(provider: str = "AWS"):
+async def sync_catalog(provider: str = "AWS", syncMode: str = "LOCAL_REFRESH"):
+    from ..intelligence.catalog import SyncMode
+    mode = SyncMode(syncMode) if syncMode in (SyncMode.LOCAL_REFRESH.value, SyncMode.LIVE_OFFICIAL_SYNC.value) else SyncMode.LOCAL_REFRESH
+
     catalog = get_catalog()
-    snap = catalog.get_snapshot(provider.upper())
-    if snap:
-        snap.compute_checksum()
-        return {"status": "synced", "provider": provider.upper(), "checksum": snap.checksum}
-    raise HTTPException(status_code=404, detail=f"No snapshot for {provider}")
+    if mode == SyncMode.LOCAL_REFRESH:
+        snap = catalog.get_snapshot(provider.upper())
+        if snap:
+            snap.compute_checksum()
+            catalog.persist()
+            return {"status": "synced", "provider": provider.upper(),
+                    "checksum": snap.checksum, "syncMode": mode.value,
+                    "note": "LOCAL_REFRESH: recomputed local checksum only. LIVE_OFFICIAL_SYNC is NOT_IMPLEMENTED."}
+        raise HTTPException(status_code=404, detail=f"No snapshot for {provider}")
+    else:
+        return {"status": "not_implemented", "syncMode": mode.value,
+                "note": "LIVE_OFFICIAL_SYNC requires internet access to official provider APIs. NOT_IMPLEMENTED."}
 
 
 @app.get("/api/v1/catalog/snapshots")

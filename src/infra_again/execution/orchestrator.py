@@ -282,6 +282,10 @@ class ExecutionOrchestrator:
                         timestamp=datetime.now(timezone.utc))])
 
             await self._transition(ctx, ExecutionState.PLANNING)
+            # Phase 4.1: Query Provider Intelligence before planning
+            provider_intel = self._query_provider_intelligence(normalized, target)
+            self._persist_file(ctx, "provider-intel.json", provider_intel)
+
             if self.provider_adapter:
                 capabilities = self._to_capability_requirements(normalized)
                 ctx.plan = await self.provider_adapter.plan(capabilities, target)
@@ -825,6 +829,73 @@ class ExecutionOrchestrator:
 
     # ------------------------------------------------------------------
     # Internal
+    # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # Provider Intelligence integration (Phase 4.1)
+    # ------------------------------------------------------------------
+
+    def _query_provider_intelligence(
+        self, normalized: dict[str, Any], target: ExecutionTarget
+    ) -> dict[str, Any]:
+        """Query the Provider Intelligence catalog for capability→provider mapping."""
+        from ..intelligence.catalog import get_catalog
+
+        catalog = get_catalog()
+        capability = normalized.get("capability", "").upper() or "OBJECT_STORAGE"
+        provider_hint = (target.provider.value if target.provider.value else ""
+                         ) or normalized.get("provider_hint", "")
+
+        mappings = catalog.get_mappings(capability=capability, provider=provider_hint)
+        if not mappings:
+            mappings = catalog.get_mappings(capability=capability)
+
+        candidates = []
+        for m in mappings:
+            is_executable = any(
+                s not in ("NONE", "PLAN_ONLY", "NOT_TESTED", "NOT_IMPLEMENTED")
+                for s in m.execution_support
+            )
+            candidates.append({
+                "provider": m.provider,
+                "serviceId": m.service_id,
+                "resourceType": m.resource_type,
+                "confidence": m.confidence,
+                "selectionReason": m.selection_reason,
+                "lifecycle": m.lifecycle.value,
+                "executionSupport": m.execution_support,
+                "isExecutable": is_executable,
+                "mappedCapability": capability,
+            })
+
+        # If provider_hint specified but no executable support for that mode
+        if provider_hint and candidates:
+            target_mode = target.mode.value
+            matching = [c for c in candidates if target_mode in c.get("executionSupport", [])]
+            if not matching:
+                return {
+                    "capability": capability,
+                    "providerHint": provider_hint,
+                    "requestedMode": target_mode,
+                    "result": "EXECUTION_NOT_SUPPORTED",
+                    "reason": f"Provider {provider_hint} does not support {target_mode} for {capability}",
+                    "candidates": candidates,
+                }
+
+        # Pick best candidate
+        selected = None
+        if candidates:
+            executable = [c for c in candidates if c["isExecutable"]]
+            selected = executable[0] if executable else candidates[0]
+
+        return {
+            "capability": capability,
+            "providerHint": provider_hint,
+            "candidates": candidates,
+            "selected": selected,
+            "result": "SUPPORTED" if selected and selected.get("isExecutable") else "PLAN_ONLY",
+        }
+
     # ------------------------------------------------------------------
 
     def _normalize_intent(self, request: InfrastructureRequest) -> dict[str, Any]:
