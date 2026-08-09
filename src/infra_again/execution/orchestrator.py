@@ -247,6 +247,10 @@ class ExecutionOrchestrator:
             infrastructure_request_id=request.infrastructureRequestId,
             idempotency_key=idempotency_key)
 
+        # Persist full canonical request for restart reconstruction
+        self.store.persist_request(ctx.run_id, request.model_dump_json())
+        self._persist_file(ctx, "request.json", request.model_dump(mode="json"))
+
         try:
             await self._transition(ctx, ExecutionState.NORMALIZING)
             normalized = self._normalize_intent(request)
@@ -446,6 +450,15 @@ class ExecutionOrchestrator:
                     run_id, ExecutionState.REQUIRES_RECONCILIATION,
                     "Restarted while EXECUTING — manual reconciliation required")
                 ctx.state = ExecutionState.REQUIRES_RECONCILIATION
+            # Safety: if request cannot be reconstructed, require reconciliation
+            if ctx.request is None and ctx.state not in (
+                ExecutionState.COMPLETED, ExecutionState.FAILED,
+                ExecutionState.CANCELLED, ExecutionState.BLOCKED,
+            ):
+                self.store.transition_state(
+                    run_id, ExecutionState.REQUIRES_RECONCILIATION,
+                    "Cannot reconstruct InfrastructureRequest — reconciliation required")
+                ctx.state = ExecutionState.REQUIRES_RECONCILIATION
         return ctx
 
     def _load_context(self, run_id: str) -> OrchestrationContext | None:
@@ -454,6 +467,15 @@ class ExecutionOrchestrator:
             return None
         ctx = OrchestrationContext(run_id=run_id)
         ctx.state = ExecutionState(run["state"])
+
+        # Reconstruct canonical request
+        request_json = self.store.get_request(run_id)
+        if request_json:
+            try:
+                ctx.request = InfrastructureRequest.model_validate_json(request_json)
+            except Exception:
+                # Cannot reconstruct request → truthfully mark for reconciliation
+                pass
 
         # Reconstruct target
         if run.get("execution_target_type"):
@@ -654,6 +676,17 @@ class ExecutionOrchestrator:
             mode=ExecutionMode.PLAN_ONLY, provider=Provider.AWS,
             platform=Platform.NATIVE_VM, target_type=None)
 
+        # Use ctx.request if available, otherwise try to reconstruct IDs from store
+        if ctx.request:
+            corr_id = ctx.request.correlationId
+            wp_id = ctx.request.workPackageId
+            ir_id = ctx.request.infrastructureRequestId
+        else:
+            run = self.store.get_run(ctx.run_id) or {}
+            corr_id = run.get("correlation_id", "")
+            wp_id = run.get("work_package_id", "")
+            ir_id = run.get("infrastructure_request_id", "")
+
         evidence_items = ctx.evidence.to_canonical_evidence_items()
         if extra_evidence:
             evidence_items.extend([{
@@ -662,9 +695,9 @@ class ExecutionOrchestrator:
                 "timestamp": e.timestamp.isoformat() if e.timestamp else None} for e in extra_evidence])
 
         return InfrastructureResult(
-            correlationId=ctx.request.correlationId if ctx.request else "",
-            workPackageId=ctx.request.workPackageId if ctx.request else "",
-            infrastructureRequestId=ctx.request.infrastructureRequestId if ctx.request else "",
+            correlationId=corr_id,
+            workPackageId=wp_id,
+            infrastructureRequestId=ir_id,
             status=status,
             provider=target.provider.value,
             platform=target.platform.value,

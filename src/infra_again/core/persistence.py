@@ -79,6 +79,7 @@ class RunStore:
                     execution_mode TEXT,
                     execution_target_type TEXT,
                     execution_target_endpoint TEXT,
+                    request_json TEXT,
                     normalized_intent TEXT,
                     plan TEXT,
                     policy_decision TEXT,
@@ -417,3 +418,25 @@ class RunStore:
             if row is None or row["final_result"] is None:
                 return None
             return row["final_result"]
+
+    # ------------------------------------------------------------------
+    # Request persistence
+    # ------------------------------------------------------------------
+
+    def persist_request(self, run_id: str, request_json: str) -> None:
+        """Persist the full canonical InfrastructureRequest JSON."""
+        with self._get_conn() as conn:
+            conn.execute(
+                "UPDATE runs SET request_json = ?, updated_at = ? WHERE run_id = ?",
+                (request_json, _now(), run_id),
+            )
+
+    def get_request(self, run_id: str) -> str | None:
+        """Retrieve the persisted canonical InfrastructureRequest JSON."""
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT request_json FROM runs WHERE run_id = ?", (run_id,)
+            ).fetchone()
+            if row is None or row["request_json"] is None:
+                return None
+            return row["request_json"]
