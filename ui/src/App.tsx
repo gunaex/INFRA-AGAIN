@@ -44,15 +44,19 @@ function StatusBadge({ status }: { status: string }) {
   return <span style={{ background: STATUS_COLORS[status] || '#6b7280', color: '#fff', padding: '2px 8px', borderRadius: 4, fontSize: 12 }}>{status}</span>;
 }
 
+interface Runner { runnerId: string; name: string; version: string; os: string; status: string; capabilities?: Record<string, any>; }
+
 function Dashboard() {
   const [targets, setTargets] = useState<Target[]>([]);
   const [caps, setCaps] = useState<Capability[]>([]);
   const [runs, setRuns] = useState<Run[]>([]);
+  const [runners, setRunners] = useState<Runner[]>([]);
 
   useEffect(() => {
     fetchJson('/api/v1/targets').then(d => setTargets(d.targets || []));
     fetchJson('/api/v1/capabilities?verified_only=true').then(d => setCaps(d.capabilities || []));
     fetchJson('/api/v1/runs').then(d => setRuns((d.runs || []).slice(0, 10)));
+    fetchJson('/api/v1/runners').then(d => setRunners(d.runners || [])).catch(() => {});
   }, []);
 
   return <div style={{ padding: 24, fontFamily: 'system-ui' }}>
@@ -83,6 +87,25 @@ function Dashboard() {
         <StatusBadge status={r.state} />
       </div>)}
     </div>
+
+    {runners.length > 0 && <>
+    <h3>🖥️ Execution Runners</h3>
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 12 }}>
+      {runners.map(r => <div key={r.runnerId} style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 12 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <strong>{r.name || r.runnerId}</strong>
+          <StatusBadge status={r.status} />
+        </div>
+        <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>{r.os} · {r.version}</div>
+        {r.capabilities && <div style={{ marginTop: 6, display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+          {Object.entries(r.capabilities).map(([k, v]: [string, any]) =>
+            <span key={k} style={{ fontSize: 11, padding: '2px 6px', background: v.status === 'READY' ? '#dcfce7' : '#f3f4f6', borderRadius: 4 }}>
+              {k}: {v.status === 'READY' ? '✅' : '○'}
+            </span>
+          )}
+        </div>}
+      </div>)}
+    </div></>}
   </div>;
 }
 

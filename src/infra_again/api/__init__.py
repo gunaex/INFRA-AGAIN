@@ -198,3 +198,117 @@ async def reconcile_run(run_id: str):
     if run.get("state") != ExecutionState.REQUIRES_RECONCILIATION.value:
         raise HTTPException(status_code=400, detail="Run is not in reconciliation state")
     return {"run_id": run_id, "status": "reconciliation_requested"}
+
+# ===========================================================================
+# Runner API (Phase 3.1)
+# ===========================================================================
+
+_runner_registry: dict[str, dict[str, Any]] = {}
+_task_registry: dict[str, dict[str, Any]] = {}
+_lease_registry: dict[str, dict[str, Any]] = {}
+_RUNNER_AUTH_TOKEN = "runner-dev-token-change-in-production"  # nosec
+
+
+def _verify_runner_auth(auth_header: str | None) -> bool:
+    if not auth_header:
+        return False
+    return auth_header.replace("Bearer ", "") == _RUNNER_AUTH_TOKEN
+
+
+class RunnerRegisterRequest(BaseModel):
+    runnerId: str = ""
+    name: str = ""
+    version: str = ""
+    os: str = ""
+    arch: str = ""
+
+
+@app.get("/api/v1/runners")
+async def list_runners():
+    return {"runners": list(_runner_registry.values()), "count": len(_runner_registry)}
+
+
+@app.post("/api/v1/runners/register")
+async def register_runner(req: RunnerRegisterRequest):
+    rid = req.runnerId or f"runner-{len(_runner_registry)}"
+    _runner_registry[rid] = {
+        "runnerId": rid, "name": req.name, "version": req.version,
+        "os": req.os, "arch": req.arch, "status": "ONLINE",
+        "registeredAt": datetime.now(timezone.utc).isoformat(),
+        "lastHeartbeat": datetime.now(timezone.utc).isoformat(),
+    }
+    return {"status": "registered", "runner": _runner_registry[rid]}
+
+
+@app.post("/api/v1/runners/{runner_id}/heartbeat")
+async def runner_heartbeat(runner_id: str, capabilities: dict[str, Any] | None = None):
+    runner = _runner_registry.get(runner_id)
+    if not runner:
+        raise HTTPException(status_code=404, detail="Runner not found")
+    runner["lastHeartbeat"] = datetime.now(timezone.utc).isoformat()
+    runner["status"] = "ONLINE"
+    if capabilities:
+        runner["capabilities"] = capabilities
+    return {"status": "ok", "runnerId": runner_id}
+
+
+class CreateTaskRequest(BaseModel):
+    runId: str = ""
+    correlationId: str = ""
+    executionMode: str = "LOCAL_RUNTIME"
+    provider: str = "ON_PREM"
+    platform: str = "KUBERNETES"
+    target: str = "KIND"
+    action: str = "APPLY"
+
+
+@app.post("/api/v1/runners/{runner_id}/tasks")
+async def create_task(runner_id: str, req: CreateTaskRequest):
+    from ..runner import ExecutionTask
+    task = ExecutionTask(
+        run_id=req.runId, correlation_id=req.correlationId,
+        execution_mode=req.executionMode, provider=req.provider,
+        platform=req.platform, target=req.target, action=req.action)
+    _task_registry[task.task_id] = {
+        "task": task.to_dict(), "state": "QUEUED", "runnerId": runner_id,
+    }
+    return {"task": task.to_dict(), "state": "QUEUED"}
+
+
+@app.post("/api/v1/runners/{runner_id}/tasks/lease")
+async def lease_task(runner_id: str):
+    for tid, t in _task_registry.items():
+        if t["state"] == "QUEUED":
+            from ..runner import TaskLease
+            now = datetime.now(timezone.utc)
+            lease = TaskLease(
+                task_id=tid, runner_id=runner_id,
+                leased_at=now.isoformat(),
+                expires_at=datetime.fromtimestamp(now.timestamp() + 3600, tz=timezone.utc).isoformat(),
+            )
+            t["state"] = "LEASED"
+            _lease_registry[tid] = lease.to_dict()
+            return {"lease": lease.to_dict(), "task": t["task"]}
+    return {"status": "no_queued_tasks"}
+
+
+@app.post("/api/v1/runners/{runner_id}/tasks/{task_id}/complete")
+async def complete_task(runner_id: str, task_id: str, result: dict[str, Any] | None = None):
+    t = _task_registry.get(task_id)
+    if not t:
+        raise HTTPException(status_code=404)
+    if t.get("runnerId") != runner_id:
+        raise HTTPException(status_code=403, detail="Not your task")
+    t["state"] = "COMPLETED"
+    t["result"] = result or {}
+    return {"status": "completed", "taskId": task_id}
+
+
+@app.post("/api/v1/runners/{runner_id}/tasks/{task_id}/fail")
+async def fail_task(runner_id: str, task_id: str, error: str = ""):
+    t = _task_registry.get(task_id)
+    if not t:
+        raise HTTPException(status_code=404)
+    t["state"] = "FAILED"
+    t["error"] = error
+    return {"status": "failed", "taskId": task_id, "error": error}
