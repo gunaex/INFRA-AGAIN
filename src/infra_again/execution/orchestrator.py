@@ -51,7 +51,7 @@ from ..core.domain import (
 from ..core.persistence import RunStore
 from ..providers.interface import ProviderAdapter
 from ..platforms.interface import PlatformAdapter
-from ..iac.engine import IaCEngine, IaCStage
+from ..iac.engine import IaCEngine, IaCStage, sha256_file, short_checksum
 from ..iac.opentofu import OpenTofuEngine, extract_plan_info
 from ..iac.renderer import render_tofu_config
 from ..visualization.graph import ArchitectureGraph, GraphType
@@ -698,23 +698,63 @@ class ExecutionOrchestrator:
             await self._transition(ctx, ExecutionState.FAILED, "tofu plan failed")
             return
 
-        # Extract plan info
+        # 5a. Compute full SHA-256 of the plan artifact
+        if plan_path.exists():
+            plan_sha256 = sha256_file(plan_path)
+        else:
+            ctx.errors.append("Plan artifact not found after tofu plan")
+            await self._transition(ctx, ExecutionState.FAILED, "plan artifact missing")
+            return
+
+        # 5b. Extract plan info
         plan_json = await engine.show(plan_path)
         plan_info = extract_plan_info(plan_json)
         self.store.update_run(ctx.run_id, iac_stage=IaCStage.IAC_PLANNED.value,
-                              iac_plan_checksum=plan_info.plan_checksum)
+                              iac_plan_checksum=plan_info.plan_checksum,
+                              iac_plan_sha256=plan_sha256,
+                              iac_plan_artifact_path=str(plan_path))
         self._persist_file(ctx, "tofu-plan.json", plan_json or {})
         self._persist_file(ctx, "tofu-plan.txt", {"stdout": plan_result.stdout[:2000]})
 
-        # 6. Policy gate before apply
+        # 6. Policy gate before apply — persist approved checksum
         self.store.update_run(ctx.run_id, iac_stage=IaCStage.WAITING_FOR_APPROVAL.value)
         plan_decision = self.policy_engine.evaluate("apply", target)
         if plan_decision.policy in (ActionPolicy.BLOCK, ActionPolicy.ASK):
             await self._transition(ctx, ExecutionState.BLOCKED, plan_decision.reason)
             return
+        # Record approved plan checksum
+        self.store.update_run(ctx.run_id, iac_approved_plan_sha256=plan_sha256)
+        self._persist_file(ctx, "plan-integrity.json", {
+            "plan_sha256": plan_sha256,
+            "approved_plan_sha256": plan_sha256,
+            "plan_artifact_path": str(plan_path),
+            "configuration_checksum": checksum,
+            "approved_at": datetime.now(timezone.utc).isoformat(),
+        })
 
-        # 7. tofu apply
+        # 7. tofu apply — with plan path containment and checksum verification
         self.store.update_run(ctx.run_id, iac_stage=IaCStage.IAC_APPLYING.value)
+
+        # 7a. Verify plan path belongs to this run
+        expected_prefix = str(iac_dir.resolve())
+        actual_path = str(plan_path.resolve())
+        if not actual_path.startswith(expected_prefix):
+            ctx.errors.append(f"Plan path not in run workspace: {actual_path}")
+            await self._transition(ctx, ExecutionState.FAILED, "plan path outside run workspace")
+            return
+
+        # 7b. Verify approved checksum matches current plan file
+        current_plan_sha256 = sha256_file(plan_path)
+        approved = self.store.get_run(ctx.run_id).get("iac_approved_plan_sha256", "")
+        if approved and current_plan_sha256 != approved:
+            ctx.errors.append(
+                f"PLAN CHECKSUM MISMATCH: approved={short_checksum(approved)} "
+                f"current={short_checksum(current_plan_sha256)}")
+            await self._transition(ctx, ExecutionState.BLOCKED, "plan checksum mismatch")
+            return
+        self.store.update_run(ctx.run_id, iac_applied_plan_sha256=current_plan_sha256)
+
+        # 7c. Apply the saved plan only
         apply_result = await engine.apply(iac_dir, plan_path)
         if not apply_result.success:
             ctx.errors.append(f"tofu apply failed (exit={apply_result.exit_code}): {apply_result.stderr[:500]}")

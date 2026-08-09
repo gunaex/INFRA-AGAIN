@@ -2,11 +2,26 @@
 
 from __future__ import annotations
 
+import hashlib
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Any
+
+
+def sha256_file(path: Path) -> str:
+    """Compute full SHA-256 hex digest of a file."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def short_checksum(full: str) -> str:
+    """Display-shortened checksum (first 16 chars)."""
+    return full[:16] if len(full) >= 16 else full
 
 
 class IaCStage(str, Enum):
@@ -105,3 +120,23 @@ class PlanInfo:
     delete_count: int = 0
     plan_checksum: str = ""
     raw_plan_json: dict[str, Any] | None = None
+
+
+@dataclass
+class PlanIntegrity:
+    """Plan integrity metadata for checksum enforcement."""
+    plan_artifact_path: str = ""
+    plan_sha256: str = ""                # Full SHA-256 of plan artifact file
+    approved_plan_sha256: str = ""       # Checksum at approval time
+    applied_plan_sha256: str = ""        # Checksum at apply time
+    config_checksum: str = ""            # Configuration checksum
+    approval_timestamp: str = ""
+    integrity_verified: bool = False
+
+    @property
+    def checksums_match(self) -> bool:
+        """True if the approved plan matches the plan being applied."""
+        return bool(
+            self.approved_plan_sha256
+            and self.approved_plan_sha256 == self.applied_plan_sha256
+        )
