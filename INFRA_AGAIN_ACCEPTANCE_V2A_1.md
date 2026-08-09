@@ -33,7 +33,7 @@ Destroy AUTO requires ALL of:
 
 | # | Gate | Expected | Result |
 |---|---|---|---|
-| 1 | Phase 0/1 regression | PASS | PASS (76 tests) |
+| 1 | Phase 0/1 regression | PASS | PASS (78 passed, 0 skipped, 0 failed) |
 | 2 | Phase 2A regression | PASS | PASS |
 | 3 | Build/import | PASS | PASS |
 | 4 | Canonical contract conformance | PASS | PASS |

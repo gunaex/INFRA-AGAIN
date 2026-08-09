@@ -41,8 +41,11 @@ echo ""
 # ------------------------------------------------------------------
 # 2. Find Python
 # ------------------------------------------------------------------
-PYTHON="${PYTHON:-python3}"
+PYTHON="${PYTHON:-python3.11}"
 if ! command -v "$PYTHON" &>/dev/null; then
+    PYTHON="$(command -v python3 2>/dev/null || echo '')"
+fi
+if [ -z "$PYTHON" ] || ! command -v "$PYTHON" &>/dev/null; then
     echo -e "${RED}FAIL: python3 not found${NC}"
     exit 1
 fi
