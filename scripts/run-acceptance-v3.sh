@@ -92,7 +92,7 @@ echo "  Optional N/A:    $OPT_UNAVAIL"
 echo ""
 
 if [ "$FAIL" -eq 0 ] && [ "$SKIP" -eq 0 ]; then
-    echo -e "${GREEN}ACCEPTED${N}"; exit 0
+    echo -e "${G}ACCEPTED${N}"; exit 0
 else
     echo -e "${R}PARTIAL/FAILED${N}"; exit 1
 fi

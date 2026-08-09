@@ -839,7 +839,7 @@ class ExecutionOrchestrator:
         self, normalized: dict[str, Any], target: ExecutionTarget
     ) -> dict[str, Any]:
         """Query the Provider Intelligence catalog for capability→provider mapping."""
-        from ..intelligence.catalog import get_catalog
+        from ..intelligence.catalog import get_catalog, evaluate_freshness, FreshnessStatus
 
         catalog = get_catalog()
         capability = normalized.get("capability", "").upper() or "OBJECT_STORAGE"
@@ -851,12 +851,16 @@ class ExecutionOrchestrator:
             mappings = catalog.get_mappings(capability=capability)
 
         candidates = []
+        warnings: list[str] = []
         for m in mappings:
+            svc = catalog.get_service(m.provider, m.service_id)
             is_executable = any(
                 s not in ("NONE", "PLAN_ONLY", "NOT_TESTED", "NOT_IMPLEMENTED")
                 for s in m.execution_support
             )
-            candidates.append({
+            # Check deprecated status from actual service
+            deprecated = svc.deprecated if svc else False
+            candidate = {
                 "provider": m.provider,
                 "serviceId": m.service_id,
                 "resourceType": m.resource_type,
@@ -864,15 +868,38 @@ class ExecutionOrchestrator:
                 "selectionReason": m.selection_reason,
                 "lifecycle": m.lifecycle.value,
                 "executionSupport": m.execution_support,
-                "isExecutable": is_executable,
+                "isExecutable": is_executable and not deprecated,
+                "deprecated": deprecated,
                 "mappedCapability": capability,
-            })
+            }
+            candidates.append(candidate)
+
+        # Evaluate catalog freshness
+        snap = catalog.get_snapshot(provider_hint) if provider_hint else None
+        catalog_freshness = FreshnessStatus.UNKNOWN
+        if snap:
+            catalog_freshness = evaluate_freshness(snap.retrieved_at)
+            if catalog_freshness == FreshnessStatus.STALE:
+                warnings.append(f"Catalog snapshot for {snap.provider} is STALE (retrieved {snap.retrieved_at})")
 
         # If provider_hint specified but no executable support for that mode
         if provider_hint and candidates:
             target_mode = target.mode.value
-            matching = [c for c in candidates if target_mode in c.get("executionSupport", [])]
+            matching = [c for c in candidates if target_mode in c.get("executionSupport", []) and not c.get("deprecated")]
             if not matching:
+                # Check if there was a match that was deprecated
+                deprecated_matches = [c for c in candidates
+                                       if target_mode in c.get("executionSupport", []) and c.get("deprecated")]
+                if deprecated_matches:
+                    return {
+                        "capability": capability,
+                        "providerHint": provider_hint,
+                        "requestedMode": target_mode,
+                        "result": "DEPRECATED_RESOURCE",
+                        "reason": f"Provider {provider_hint} has matching service but it is DEPRECATED",
+                        "candidates": candidates,
+                        "warnings": warnings + [f"Deprecated: {c['provider']} {c['serviceId']}" for c in deprecated_matches],
+                    }
                 return {
                     "capability": capability,
                     "providerHint": provider_hint,
@@ -880,20 +907,38 @@ class ExecutionOrchestrator:
                     "result": "EXECUTION_NOT_SUPPORTED",
                     "reason": f"Provider {provider_hint} does not support {target_mode} for {capability}",
                     "candidates": candidates,
+                    "warnings": warnings,
                 }
 
-        # Pick best candidate
+        # Pick best candidate (exclude deprecated for executable selection)
         selected = None
         if candidates:
-            executable = [c for c in candidates if c["isExecutable"]]
-            selected = executable[0] if executable else candidates[0]
+            non_deprecated = [c for c in candidates if not c.get("deprecated")]
+            executable = [c for c in non_deprecated if c["isExecutable"]]
+            if executable:
+                selected = executable[0]
+            elif non_deprecated:
+                selected = non_deprecated[0]
+            else:
+                # All candidates deprecated — still show in comparison but note it
+                warnings.append("All matching candidates are DEPRECATED")
+
+        result = "SUPPORTED" if selected and selected.get("isExecutable") else "PLAN_ONLY"
+
+        # Add freshness warning to selection
+        if selected and catalog_freshness == FreshnessStatus.STALE:
+            warnings.append(f"Catalog freshness: STALE (snapshot age may affect accuracy)")
+            selected = dict(selected)  # copy
+            selected["catalogFreshness"] = "STALE"
 
         return {
             "capability": capability,
             "providerHint": provider_hint,
             "candidates": candidates,
             "selected": selected,
-            "result": "SUPPORTED" if selected and selected.get("isExecutable") else "PLAN_ONLY",
+            "result": result,
+            "catalogFreshness": catalog_freshness.value,
+            "warnings": warnings,
         }
 
     # ------------------------------------------------------------------

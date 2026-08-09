@@ -77,6 +77,40 @@ class FreshnessStatus(str, Enum):
     UNKNOWN = "UNKNOWN"
 
 
+# Default threshold for catalog staleness
+CATALOG_STALE_AFTER_DAYS = 7
+
+
+def evaluate_freshness(
+    retrieved_at: str | None,
+    now: datetime | None = None,
+    stale_after_days: int = CATALOG_STALE_AFTER_DAYS,
+) -> FreshnessStatus:
+    """Deterministic freshness evaluation.
+
+    Args:
+        retrieved_at: ISO-8601 timestamp string (or empty/None)
+        now: Frozen 'now' for deterministic testing (defaults to real now)
+        stale_after_days: Days after which a snapshot is considered STALE
+
+    Returns:
+        CURRENT if within threshold, STALE if exceeded, UNKNOWN if no timestamp.
+    """
+    if not retrieved_at:
+        return FreshnessStatus.UNKNOWN
+
+    now = now or datetime.now(timezone.utc)
+    try:
+        retrieved = datetime.fromisoformat(retrieved_at.replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return FreshnessStatus.UNKNOWN
+
+    age = now - retrieved
+    if age.days > stale_after_days:
+        return FreshnessStatus.STALE
+    return FreshnessStatus.CURRENT
+
+
 # ============================================================================
 # Provider Service
 # ============================================================================
@@ -493,13 +527,20 @@ class ProviderCatalog:
                 diff.changes.append({"action": "SERVICE_ADDED", "serviceId": sid})
             for sid in prev_ids - curr_ids:
                 diff.changes.append({"action": "SERVICE_REMOVED", "serviceId": sid})
-            # Check for deprecation changes
+            # Check for deprecation changes and schema changes
             for s in curr.services:
                 ps = next((ps for ps in prev.services if ps.service_id == s.service_id), None)
-                if ps and s.deprecated and not ps.deprecated:
-                    diff.changes.append({"action": "DEPRECATED", "serviceId": s.service_id})
-                if ps and not s.deprecated and ps.deprecated:
-                    diff.changes.append({"action": "RETIRED", "serviceId": s.service_id})
+                if ps:
+                    if s.deprecated and not ps.deprecated:
+                        diff.changes.append({"action": "DEPRECATED", "serviceId": s.service_id})
+                    if not s.deprecated and ps.deprecated:
+                        diff.changes.append({"action": "RETIRED", "serviceId": s.service_id})
+                    # SCHEMA_CHANGED: service exists in both but metadata changed
+                    cs_prev = ps.compute_service_checksum()
+                    cs_curr = s.compute_service_checksum()
+                    if cs_prev != cs_curr:
+                        diff.changes.append({"action": "SCHEMA_CHANGED", "serviceId": s.service_id,
+                                              "previousChecksum": cs_prev, "currentChecksum": cs_curr})
         return diff
 
     # ------------------------------------------------------------------

@@ -34,12 +34,25 @@
 | 28 | Provenance: STATIC_FIXTURE adapters | UNIT | `AwsCatalogSource.source_kind == 'STATIC_FIXTURE'` | PASS |
 | 29 | Provenance: no hidden OFFICIAL_LIVE | UNIT | All adapters source_kind = STATIC_FIXTURE | PASS |
 | 30 | Provenance: S3 MANUAL_VERIFIED, EC2 STATIC_SEED | UNIT | SourceType audit of all services | PASS |
-| 31 | Phase 3 regression (46 tests) | RUNTIME | `pytest tests/integration/test_phase3.py tests/unit/` exit 0 | PASS |
+| 31 | Phase 3 regression (frozen V3 runner) | RUNTIME | `./scripts/run-acceptance-v3.sh` exit 0, 4 PASS, 0 FAIL, 0 SKIP | PASS |
 | 32 | Frontend build produces dist/ | RUNTIME | `npm ci && vite build` → dist/index.html exists | PASS |
-| 33 | LIVE_OFFICIAL_SYNC | N/A | NOT_EXECUTED (internet source fetch not attempted) | SKIP |
-| 34 | BROWSER_E2E | N/A | NOT_EXECUTED (no browser automation) | SKIP |
-| 35 | FLY_REMOTE | N/A | NOT_EXECUTED (Fly deploy not performed) | SKIP |
-| 36 | CLOUDFLARE_REMOTE | N/A | NOT_EXECUTED (Cloudflare deploy not performed) | SKIP |
+| 33 | Freshness: CURRENT evaluation | UNIT | retrieved 1d ago, threshold 7d → CURRENT | PASS |
+| 34 | Freshness: STALE evaluation | UNIT | retrieved 8d ago, threshold 7d → STALE | PASS |
+| 35 | Freshness: UNKNOWN evaluation | UNIT | empty/missing timestamp → UNKNOWN | PASS |
+| 36 | Stale planner warning | INTEGRATION | STALE snapshot → catalogFreshness=STALE in planner output | PASS |
+| 37 | Deprecated: comparison visibility | UNIT | deprecated=True → comparison output shows deprecated | PASS |
+| 38 | Deprecated: planner exclusion | INTEGRATION | deprecated S3 + SIMULATED → DEPRECATED_RESOURCE, not selected | PASS |
+| 39 | Catalog diff: SERVICE_ADDED | UNIT | Lambda added to snapshot → SERVICE_ADDED in diff | PASS |
+| 40 | Catalog diff: SERVICE_REMOVED | UNIT | RDS removed from snapshot → SERVICE_REMOVED in diff | PASS |
+| 41 | Catalog diff: SCHEMA_CHANGED | UNIT | Service metadata change → SCHEMA_CHANGED with checksums | PASS |
+| 42 | Catalog diff: DEPRECATED | UNIT | deprecated flag change → DEPRECATED in diff | PASS |
+| 43 | Required/optional accounting | RUNTIME | 25 REQUIRED PASS, 0 FAIL, 0 SKIP; optional separated | PASS |
+| 44 | Docker real build (not cached) | RUNTIME | `docker build -t infra-again:v4-acceptance .` exit 0 | PASS |
+| 45 | Docker real run + health | RUNTIME | container health 200, providers API 2 | PASS |
+| 46 | LIVE_OFFICIAL_SYNC | N/A | NOT_EXECUTED (internet source fetch not attempted) | NOT_EXECUTED |
+| 47 | BROWSER_E2E | N/A | NOT_EXECUTED (no browser automation) | NOT_EXECUTED |
+| 48 | FLY_REMOTE | N/A | NOT_EXECUTED (Fly deploy not performed) | NOT_EXECUTED |
+| 49 | CLOUDFLARE_REMOTE | N/A | NOT_EXECUTED (Cloudflare deploy not performed) | NOT_EXECUTED |
 
 ## Evidence Level Legend
 
@@ -51,8 +64,8 @@
 
 ## Summary
 
-- RUNTIME verified: 22 claims
-- INTEGRATION verified: 8 claims
-- UNIT verified: 6 claims
+- RUNTIME verified: 27 claims
+- INTEGRATION verified: 11 claims
+- UNIT verified: 7 claims
 - NOT_EXECUTED (optional): 4 claims
 - No claims are STATIC_ONLY
