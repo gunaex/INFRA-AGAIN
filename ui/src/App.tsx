@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 
-type View = 'dashboard' | 'plan' | 'run';
+type View = 'dashboard' | 'plan' | 'run' | 'providers';
 
 interface Target {
   target_type: string; name: string; provider: string; platform: string;
@@ -45,6 +45,62 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 interface Runner { runnerId: string; name: string; version: string; os: string; status: string; capabilities?: Record<string, any>; }
+
+interface ProviderSvc { provider: string; serviceId: string; displayName: string; category: string; lifecycle: string; executionSupport: string[]; isExecutable: boolean; isSafeToExecute: boolean; }
+
+interface Candidate { provider: string; serviceId: string; fit: string; executionSupport: string[]; lifecycle: string; confidence: number; selectionReason: string; }
+
+function ProviderIntel() {
+  const [services, setServices] = useState<ProviderSvc[]>([]);
+  const [compareCap, setCompareCap] = useState('OBJECT_STORAGE');
+  const [candidates, setCandidates] = useState<Candidate[]>([]);
+
+  useEffect(() => {
+    fetchJson('/api/v1/providers/AWS/services').then(d => setServices(d.services || []));
+  }, []);
+
+  const runCompare = async (cap: string) => {
+    const r = await fetch(API + '/api/v1/capabilities/compare', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({capability: cap}) });
+    const d = await r.json();
+    setCandidates(d.candidates || []);
+    setCompareCap(cap);
+  };
+
+  const caps = ['OBJECT_STORAGE','RELATIONAL_DATABASE','KUBERNETES','CONTAINER_RUNTIME','COMPUTE_VM','SERVERLESS'];
+
+  return <div style={{padding:24,fontFamily:'system-ui'}}>
+    <h2>🧠 Provider Intelligence</h2>
+
+    <h3>AWS Services ({services.length})</h3>
+    <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(220px,1fr))',gap:8}}>
+      {services.map(s => <div key={s.serviceId} style={{border:'1px solid #e5e7eb',borderRadius:6,padding:10,fontSize:13}}>
+        <strong>{s.displayName}</strong> <StatusBadge status={s.lifecycle} />
+        <div style={{color:'#6b7280'}}>{s.category} · {s.serviceId}</div>
+        <div style={{marginTop:4,display:'flex',gap:4,flexWrap:'wrap'}}>
+          {(s.executionSupport||[]).map(e => <span key={e} style={{fontSize:11,padding:'2px 6px',background:s.isExecutable?'#dcfce7':'#f3f4f6',borderRadius:4}}>{e}</span>)}
+        </div>
+      </div>)}
+    </div>
+
+    <h3 style={{marginTop:24}}>🔍 Provider Comparison</h3>
+    <div style={{display:'flex',gap:8,marginBottom:12}}>
+      {caps.map(c => <button key={c} onClick={() => runCompare(c)} style={{padding:'6px 12px',background:compareCap===c?'#3b82f6':'#f3f4f6',color:compareCap===c?'#fff':'#374151',border:'none',borderRadius:6,cursor:'pointer',fontSize:12}}>{c.replace(/_/g,' ')}</button>)}
+    </div>
+    {candidates.length > 0 && <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(280px,1fr))',gap:12}}>
+      {candidates.map((c,i) => <div key={i} style={{border:'1px solid #e5e7eb',borderRadius:8,padding:14}}>
+        <div style={{display:'flex',justifyContent:'space-between'}}>
+          <strong>{c.provider} · {c.serviceId}</strong>
+          <StatusBadge status={c.lifecycle} />
+        </div>
+        <div style={{fontSize:13,color:'#6b7280',marginTop:4}}>Fit: {c.fit} · Confidence: {Math.round(c.confidence*100)}%</div>
+        <div style={{marginTop:4,display:'flex',gap:4,flexWrap:'wrap'}}>
+          {(c.executionSupport||[]).map(e => <span key={e} style={{fontSize:11,padding:'2px 6px',background:'#eff6ff',borderRadius:4}}>{e}</span>)}
+        </div>
+        <div style={{fontSize:12,marginTop:6,color:'#374151'}}>{c.selectionReason}</div>
+      </div>)}
+    </div>}
+  </div>;
+}
 
 function Dashboard() {
   const [targets, setTargets] = useState<Target[]>([]);
@@ -197,6 +253,7 @@ export default function App() {
     { key: 'dashboard', label: '🏠 Dashboard' },
     { key: 'plan', label: '📐 Plan Review' },
     { key: 'run', label: '🔍 Run Detail' },
+    { key: 'providers', label: '🧠 Provider Intel' },
   ];
 
   return <div>
@@ -209,5 +266,6 @@ export default function App() {
     {view === 'dashboard' && <Dashboard />}
     {view === 'plan' && <PlanReview />}
     {view === 'run' && <RunDetail />}
+    {view === 'providers' && <ProviderIntel />}
   </div>;
 }

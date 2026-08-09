@@ -312,3 +312,95 @@ async def fail_task(runner_id: str, task_id: str, error: str = ""):
     t["state"] = "FAILED"
     t["error"] = error
     return {"status": "failed", "taskId": task_id, "error": error}
+
+# ===========================================================================
+# Provider Intelligence API (Phase 4)
+# ===========================================================================
+
+from ..intelligence.catalog import get_catalog
+
+
+@app.get("/api/v1/providers")
+async def list_providers():
+    catalog = get_catalog()
+    aws = catalog.get_snapshot("AWS")
+    gcp = catalog.get_snapshot("GCP")
+    return {"providers": [
+        {"provider": "AWS", "services": aws.service_count if aws else 0,
+         "verified": sum(1 for s in catalog.get_services("AWS") if s.lifecycle.value in ("VERIFIED","SUPPORTED")),
+         "executable": sum(1 for s in catalog.get_services("AWS") if s.is_executable)},
+        {"provider": "GCP", "services": gcp.service_count if gcp else 0,
+         "verified": sum(1 for s in catalog.get_services("GCP") if s.lifecycle.value in ("VERIFIED","SUPPORTED")),
+         "executable": sum(1 for s in catalog.get_services("GCP") if s.is_executable)},
+    ]}
+
+
+@app.get("/api/v1/providers/{provider}")
+async def get_provider(provider: str):
+    catalog = get_catalog()
+    snap = catalog.get_snapshot(provider.upper())
+    if not snap:
+        raise HTTPException(status_code=404, detail=f"Provider {provider} not found")
+    services = [s.to_dict() for s in catalog.get_services(provider.upper())]
+    return {"provider": provider.upper(), "services": services, "snapshot": {
+        "snapshotId": snap.snapshot_id, "serviceCount": snap.service_count,
+        "checksum": snap.checksum, "freshness": snap.freshness.value,
+    }}
+
+
+@app.get("/api/v1/providers/{provider}/services")
+async def get_provider_services(provider: str):
+    catalog = get_catalog()
+    return {"services": [s.to_dict() for s in catalog.get_services(provider.upper())]}
+
+
+@app.get("/api/v1/capabilities")
+async def list_capabilities():
+    from ..intelligence.catalog import CapabilityCategory
+    return {"capabilities": [{"id": c.value, "name": c.name.replace("_"," ").title()} for c in CapabilityCategory]}
+
+
+@app.get("/api/v1/capabilities/{capability}")
+async def get_capability(capability: str):
+    catalog = get_catalog()
+    mappings = catalog.get_mappings(capability=capability.upper())
+    return {"capability": capability.upper(), "mappings": [m.to_dict() for m in mappings]}
+
+
+class CompareRequest(BaseModel):
+    capability: str = ""
+    executionMode: str = ""
+
+
+@app.post("/api/v1/capabilities/compare")
+async def compare_capabilities(req: CompareRequest):
+    catalog = get_catalog()
+    results = catalog.compare(req.capability.upper(), req.executionMode)
+    return {"capability": req.capability.upper(), "candidates": results}
+
+
+@app.get("/api/v1/catalog/status")
+async def catalog_status():
+    catalog = get_catalog()
+    snapshots = catalog.get_snapshots()
+    return {"snapshots": [{"provider": s.provider, "snapshotId": s.snapshot_id,
+        "serviceCount": s.service_count, "checksum": s.checksum,
+        "freshness": s.freshness.value, "retrievedAt": s.retrieved_at} for s in snapshots]}
+
+
+@app.post("/api/v1/catalog/sync")
+async def sync_catalog(provider: str = "AWS"):
+    catalog = get_catalog()
+    snap = catalog.get_snapshot(provider.upper())
+    if snap:
+        snap.compute_checksum()
+        return {"status": "synced", "provider": provider.upper(), "checksum": snap.checksum}
+    raise HTTPException(status_code=404, detail=f"No snapshot for {provider}")
+
+
+@app.get("/api/v1/catalog/snapshots")
+async def list_snapshots():
+    catalog = get_catalog()
+    return {"snapshots": [{"provider": s.provider, "snapshotId": s.snapshot_id,
+        "serviceCount": s.service_count, "checksum": s.checksum,
+        "freshness": s.freshness.value} for s in catalog.get_snapshots()]}
