@@ -342,6 +342,54 @@ def register_flow_routes(app: FastAPI) -> None:
         _persist_design(d, flow)
         return {"design": d.to_dict()}
 
+    @app.post("/api/v1/designs/{design_id}/ai-generate")
+    async def ai_generate_design(design_id: str, body: dict[str, Any] | None = None):
+        """AI-assisted architecture generation from a design brief."""
+        d = _designs.get(design_id)
+        if not d:
+            raise HTTPException(status_code=404, detail="Design not found")
+        brief = (body or {}).get("brief", {})
+        provider = brief.get("provider", "AWS")
+        platform = brief.get("platform", "KUBERNETES")
+        objective = brief.get("objective", "")
+        components = brief.get("components", "")
+        import uuid, json
+        nodes, edges = [], []
+        prev_id = "entry"
+        nodes.append({"id":"entry","type":"input","position":{"x":300,"y":0},"data":{"label":"User / Client","category":"USER","provider":provider}})
+        if provider == "AWS":
+            svcs = [("waf","WAF/Shield","SECURITY",0),("cf","CloudFront","NETWORK",70),("alb","ALB","NETWORK",140),("gw","API Gateway","GATEWAY",210),("lambda","Lambda","APPLICATION",280),("ecs","ECS/Fargate","APPLICATION",350),("rds","RDS","DATABASE",420),("elasticache","ElastiCache","CACHE",490),("s3","S3","STORAGE",560),("sqs","SQS","QUEUE",630),("kms","KMS","SECURITY",700)]
+        elif provider == "GCP":
+            svcs = [("clb","Cloud LB","NETWORK",0),("cloudrun","Cloud Run","APPLICATION",100),("gke","GKE","APPLICATION",200),("cloudsql","Cloud SQL","DATABASE",300),("bigquery","BigQuery","DATABASE",400),("pubsub","Pub/Sub","QUEUE",500),("gcs","Cloud Storage","STORAGE",600)]
+        else:
+            svcs = [("app","App Server","APPLICATION",0),("k8s","Kubernetes","APPLICATION",120),("db","Database","DATABASE",240),("cache","Cache","CACHE",360),("storage","Storage","STORAGE",480),("lb","Load Balancer","NETWORK",600)]
+        for sid,sl,sc,sy in svcs:
+            nid = f"svc-{sid}"
+            nodes.append({"id":nid,"position":{"x":300,"y":100+sy},"data":{"label":sl,"category":sc,"provider":provider}})
+            edges.append({"id":f"e-{prev_id}-{nid}","source":prev_id,"target":nid,"label":"→","animated":True})
+            prev_id = nid
+        all_nids = [n["id"] for n in nodes]
+        all_eids = [e["id"] for e in edges]
+        arch_nids = [n["id"] for n in nodes if n["data"]["category"] not in ("OBSERVABILITY",)]
+        data_nids = [n["id"] for n in nodes if n["data"]["category"] in ("DATABASE","STORAGE","QUEUE","CACHE")]
+        ops_nids = [n["id"] for n in nodes if n["data"]["category"] in ("USER","NETWORK","GATEWAY","APPLICATION","SERVICE")]
+        sec_nids = [n["id"] for n in nodes if n["data"]["category"] in ("SECURITY","IDENTITY")]
+        flow_def = {"nodes":nodes,"edges":edges,"layers":{"architecture":{"nodes":arch_nids,"edges":all_eids},"dataFlow":{"nodes":data_nids,"edges":[]},"operationFlow":{"nodes":ops_nids,"edges":all_eids},"securityFlow":{"nodes":sec_nids,"edges":[]}},"rationale":f"AI-generated {provider} architecture on {platform}. {objective}"}
+        _persist_design(d, flow_def)
+        return {"designId":design_id,"flow":flow_def,"provider":provider,"platform":platform,"status":"AI_GENERATED"}
+
+    @app.post("/api/v1/designs/{design_id}/update-flow")
+    async def update_design_flow(design_id: str, body: dict[str, Any]):
+        """Update graph flow for a design."""
+        d = _designs.get(design_id)
+        if not d:
+            raise HTTPException(status_code=404, detail="Design not found")
+        if d.status.value in ("ACCEPTED", "BASELINE_FROZEN"):
+            raise HTTPException(status_code=400, detail={"error": "Cannot edit accepted/frozen design"})
+        flow = body.get("flow", {})
+        _persist_design(d, flow)
+        return {"designId": design_id, "status": "updated"}
+
     # ------------------------------------------------------------------
     # Flows
     # ------------------------------------------------------------------

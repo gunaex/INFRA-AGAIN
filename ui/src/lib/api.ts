@@ -20,6 +20,8 @@ export const api={
   createDesign:(b:any)=>api.post('/api/v1/designs',b),
   getDesign:(id:string)=>api.get<any>(`/api/v1/designs/${id}`),
   acceptDesign:(id:string)=>api.post(`/api/v1/designs/${id}/accept`),
+  aiGenerate:(id:string,b:any)=>api.post(`/api/v1/designs/${id}/ai-generate`,b),
+  updateDesignFlow:(id:string,flow:any)=>api.post(`/api/v1/designs/${id}/update-flow`,{flow}),
   // Plans
   createPlan:(designId:string)=>api.post(`/api/v1/designs/${designId}/implementation-plan`),
   getPlan:(id:string)=>api.get<any>(`/api/v1/implementation-plans/${id}`),
