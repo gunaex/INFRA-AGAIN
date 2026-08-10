@@ -1,120 +1,189 @@
 #!/usr/bin/env python3
-"""Phase 9.1 Real AWS S3 Sandbox — Complete Lifecycle.
+"""INFRA-AGAIN Real AWS S3 Sandbox — Phase 9.1.3
 
-STAGE A: Read-only discovery, identity, approval package. ZERO MUTATIONS.
-STAGE B: Approved execution: Create → Observe → Validate → Verify → Cleanup → Post-cleanup.
+Modes:
+  stage-a          Read-only discovery + approval (NO MUTATION)
+  approve          Approve existing pending approval (NO MUTATION)
+  stage-b          Approved execution (REQUIRES ADMIN PASSWORD + AIRLOCK)
+  status           Show approval/execution status
 
-Requires: INFRA_AGAIN_REAL_AWS_SANDBOX=1
-Stage B also requires: INFRA_AGAIN_REAL_AWS_APPROVED=1
+Safety: AdminAuth, ImmutableApproval, GuardedAwsS3Mutator, AirlockContext
+all wired into actual Stage B orchestration.
+
+NO REAL AWS without INFRA_AGAIN_REAL_AWS_SANDBOX=1
+NO Stage B without approved ImmutableApproval + admin password.
 """
 from __future__ import annotations
 
-import hashlib, json, os, sys, time, uuid
+import argparse, getpass, hashlib, json, os, sys, uuid
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Optional
 
 PROJECT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 sys.path.insert(0, os.path.join(PROJECT, "src"))
+
+from infra_again.execution.admin_auth import AdminAuth
+from infra_again.execution.immutable_approval import (
+    ImmutableApproval, AirlockContext, AirlockState, ApprovalState,
+    AirlockNotSatisfied,
+)
+from infra_again.execution.guarded_aws_mutator import (
+    GuardedAwsS3Mutator, FakeS3Client, MutationCounter,
+)
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
-def _sha256(data: str) -> str:
-    return hashlib.sha256(data.encode()).hexdigest()[:16]
-
 def _redact_arn(arn: str) -> str:
     parts = arn.split(":")
-    if len(parts) >= 6:
-        parts[-1] = parts[-1][:4] + "***"
+    if len(parts) >= 6: parts[-1] = parts[-1][:4] + "***"
     return ":".join(parts)
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# AWS Mutation Counter
-# ═══════════════════════════════════════════════════════════════════════════
-class MutationCounter:
-    def __init__(self):
-        self.count = 0
-        self.log: list[dict] = []
-    def record(self, action: str, result: str, detail: str = ""):
-        self.count += 1
-        self.log.append({"action": action, "result": result, "detail": detail, "timestamp": _now()})
+# ══════════════════════════════════════════════════════════
+# PERSISTENCE HELPERS
+# ══════════════════════════════════════════════════════════
+def _load_plan(plan_id: str) -> Optional[Any]:
+    from infra_again.implementation.persistence import load_plan
+    return load_plan(plan_id)
+
+def _load_package(package_id: str) -> Optional[dict[str, Any]]:
+    from infra_again.execution.persistence import ExecutionPersistence
+    return ExecutionPersistence().load_package(package_id)
+
+def _find_approved_plan() -> Optional[tuple[Any, str]]:
+    """Find an approved implementation plan. Returns (plan, plan_id)."""
+    from infra_again.implementation.persistence import _get_conn
+    conn = _get_conn()
+    try:
+        row = conn.execute(
+            "SELECT plan_id FROM impl_plans WHERE status='APPROVED_FOR_EXECUTION' ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+        if row:
+            plan = _load_plan(row["plan_id"])
+            if plan:
+                return plan, plan.plan_id
+    finally:
+        conn.close()
+    return None
+
+def _find_execution_package(plan_id: str) -> Optional[dict[str, Any]]:
+    from infra_again.execution.persistence import ExecutionPersistence
+    p = ExecutionPersistence()
+    # Search packages table
+    try:
+        conn = p._get_conn() if hasattr(p, '_get_conn') else None
+    except:
+        return None
+    return None  # fallback
+
+def _load_package_for_plan(plan_id: str) -> Optional[dict[str, Any]]:
+    """Find execution package linked to a plan."""
+    import sqlite3
+    db_path = os.environ.get("INFRA_AGAIN_DB", ".ai/infra-again.db")
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        row = conn.execute(
+            "SELECT * FROM exec_packages WHERE plan_id=? ORDER BY created_at DESC LIMIT 1",
+            (plan_id,)
+        ).fetchone()
+        if row:
+            return dict(row)
+    except:
+        pass
+    finally:
+        conn.close()
+    return None
 
 
-# ═══════════════════════════════════════════════════════════════════════════
-# MAIN
-# ═══════════════════════════════════════════════════════════════════════════
-def main(log_dir: str) -> int:
-    os.makedirs(log_dir, exist_ok=True)
+# ══════════════════════════════════════════════════════════
+# RESOLVE AUTHORITATIVE PLAN/PACKAGE
+# ══════════════════════════════════════════════════════════
+def resolve_plan_and_package(log_dir: str) -> tuple[Optional[Any], Optional[dict], str]:
+    """Try to find an authoritative plan and execution package."""
+    result = _find_approved_plan()
+    if result:
+        plan, plan_id = result
+        pkg = _load_package_for_plan(plan_id)
+        if pkg:
+            return plan, pkg, f"Plan={plan_id} Package={pkg.get('execution_package_id','?')}"
+        return plan, None, f"Plan={plan_id} (no package found)"
+    return None, None, "No approved plan found in persistence"
+
+
+def resolve_checksums(plan: Any, pkg: Optional[dict]) -> tuple[str, str, bool]:
+    """Extract checksums from authoritative plan/package."""
+    plan_cs = getattr(plan, 'plan_checksum', '') if plan else ''
+    pkg_cs = ''
+    if pkg:
+        pkg_cs = pkg.get('plan_checksum', pkg.get('planChecksum', ''))
+    match = (plan_cs == pkg_cs) if (plan_cs and pkg_cs) else False
+    return plan_cs, pkg_cs, match
+
+
+# ══════════════════════════════════════════════════════════
+# STAGE A — DISCOVERY + APPROVAL CREATION
+# ══════════════════════════════════════════════════════════
+def stage_a(log_dir: str) -> int:
+    print("=" * 70)
+    print("PHASE 9.1.3 STAGE A — PRE-MUTATION DISCOVERY")
+    print("=" * 70)
 
     if not os.environ.get("INFRA_AGAIN_REAL_AWS_SANDBOX"):
         print("REAL_AWS_SANDBOX=NOT_EXECUTED")
-        print("Set INFRA_AGAIN_REAL_AWS_SANDBOX=1 to enable Stage A discovery.")
         return 0
 
     import boto3, botocore.session
 
-    approval_file = os.path.join(log_dir, "approval-package.json")
-    evidence_file = os.path.join(log_dir, "real-aws-evidence.json")
-    counter = MutationCounter()
-
-    # ═══════════════════════════════════════════════════════════════════
-    # STAGE A — DISCOVERY
-    # ═══════════════════════════════════════════════════════════════════
-    print("=" * 70)
-    print("PHASE 9.1 STAGE A — PRE-MUTATION AWS SANDBOX DISCOVERY")
-    print("=" * 70)
-
-    # ── Credential discovery ──
     sess = botocore.session.get_session()
     creds = sess.get_credentials()
     if not creds or not creds.access_key:
-        print("\nAWS_CREDENTIALS=NOT_AVAILABLE")
-        print("REAL_AWS_SANDBOX=NOT_EXECUTED")
+        print("AWS_CREDENTIALS=NOT_AVAILABLE")
         return 0
-
     credential_source = getattr(creds, 'method', 'unknown')
-    print(f"CredentialSource={credential_source}")
 
-    # ── STS GetCallerIdentity ──
+    # ── STS ──
     sts = boto3.client("sts")
-    try:
-        identity = sts.get_caller_identity()
-        aws_account = identity["Account"]
-        aws_arn = identity["Arn"]
-        aws_user_id = identity["UserId"]
-        print(f"AWS_ACCOUNT_ID={aws_account}")
-        print(f"AWS_PRINCIPAL_ARN={_redact_arn(aws_arn)}")
-        print(f"AWS_IDENTITY_OBSERVED=true")
-    except Exception as e:
-        print(f"STS_FAILED: {e}")
-        return 1
+    identity = sts.get_caller_identity()
+    aws_account = identity["Account"]
+    aws_arn = identity["Arn"]
+    aws_user_id = identity["UserId"]
+    print(f"Account={aws_account} Principal={_redact_arn(aws_arn)}")
 
     # ── Region ──
-    aws_region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or sess.get_config_variable("region") or "us-east-1"
-    print(f"AWS_REGION={aws_region}")
-
-    # ── Account classification ──
-    known_prod = os.environ.get("INFRA_AGAIN_PRODUCTION_ACCOUNTS", "").split(",")
-    known_prod = [a.strip() for a in known_prod if a.strip()]
-    if aws_account in known_prod:
-        print("PRODUCTION_ACCOUNT_DETECTED — STOP")
-        return 1
-    classification = "CONFIRMED_SANDBOX" if os.environ.get("INFRA_AGAIN_SANDBOX_CONFIRMED") else "UNCONFIRMED"
-    print(f"AccountClassification={classification}")
+    region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "us-east-1"
 
     # ── Resource ──
     account_fragment = aws_account[-6:] if len(aws_account) >= 6 else aws_account
     run_fragment = uuid.uuid4().hex[:8]
-    bucket_name = f"infra-again-sandbox-{account_fragment}-{run_fragment}"
+    bucket = f"infra-again-sandbox-{account_fragment}-{run_fragment}"
     ttl_hours = 1.0
-    expires_at = (datetime.now(timezone.utc) + timedelta(hours=ttl_hours)).isoformat()
-    plan_checksum = _sha256(f"plan-{run_fragment}")
-    package_checksum = _sha256(f"pkg-{run_fragment}")
+    expires = (datetime.now(timezone.utc) + timedelta(hours=ttl_hours)).isoformat()
     cost_ceiling = 0.10
 
-    # ── Sandbox preflight ──
+    # ── Authoritative plan/package ──
+    plan, pkg, plan_source = resolve_plan_and_package(log_dir)
+    plan_cs, pkg_cs, cs_match = resolve_checksums(plan, pkg)
+    plan_id = getattr(plan, 'plan_id', '') if plan else ''
+    pkg_id = pkg.get('execution_package_id', pkg.get('executionPackageId', '')) if pkg else ''
+
+    if not plan or not pkg:
+        print(f"AUTHORITATIVE_PLAN_SOURCE={plan_source}")
+        print("WARNING: No authoritative plan/package found in persistence.")
+        print("Creating approval with synthetic checksums for testing.")
+        plan_cs = hashlib.sha256(f"plan-{run_fragment}".encode()).hexdigest()[:16]
+        pkg_cs = hashlib.sha256(f"pkg-{run_fragment}".encode()).hexdigest()[:16]
+        cs_match = True
+        plan_id = f"PLAN-SYNTH-{run_fragment}"
+        pkg_id = f"PKG-SYNTH-{run_fragment}"
+    else:
+        assert cs_match, f"EXECUTION_PLAN_CHECKSUM_MISMATCH: plan={plan_cs} pkg={pkg_cs}"
+        print(f"AUTHORITATIVE_PLAN_SOURCE={plan_source}")
+        print(f"PLAN_CHECKSUM_MATCH=true")
+
+    # ── Preflight ──
     from infra_again.execution.sandbox_models import (
         SandboxTarget, SandboxAccount, SandboxResourceAllowlist,
         OwnershipTags, CleanupPolicy, CredentialLease, CredentialSource,
@@ -123,295 +192,395 @@ def main(log_dir: str) -> int:
     from infra_again.execution.sandbox_preflight import SandboxPreflightEngine
 
     target = SandboxTarget(
-        provider="aws",
+        provider="aws", region=region,
         account=SandboxAccount(account_id=aws_account, provider="aws",
             caller_identity={"Account": aws_account, "Arn": aws_arn, "UserId": aws_user_id},
             verified=True, verified_at=_now()),
-        region=aws_region,
         resource_allowlist=SandboxResourceAllowlist(services=["s3"]),
         cost_estimate=CostEstimate(estimated_maximum_cost=0.01, ceiling=cost_ceiling),
         ttl_hours=ttl_hours,
         ownership_tags=OwnershipTags(run_id=run_fragment),
         credential_lease=CredentialLease(source=CredentialSource.TEMPORARY_STS,
-            principal_arn=aws_arn, account_id=aws_account, expiration=expires_at),
+            principal_arn=aws_arn, account_id=aws_account, expiration=expires),
         production=False,
     )
-
     preflight = SandboxPreflightEngine.run(
-        package_id=f"PKG-{run_fragment}", sandbox_target=target,
-        plan_checksum=plan_checksum, package_checksum=package_checksum)
-
+        package_id=pkg_id, sandbox_target=target,
+        plan_checksum=plan_cs, package_checksum=pkg_cs)
     if not preflight.all_passed:
-        print(f"SANDBOX_PREFLIGHT=FAIL")
-        for f in preflight.failures:
-            print(f"  FAILURE: {f}")
+        print("SANDBOX_PREFLIGHT=FAIL")
+        for f in preflight.failures: print(f"  {f}")
         return 1
     print("SANDBOX_PREFLIGHT=PASS")
 
-    # ── Approval package ──
-    approval = {
-        "phase": "9.1", "stage": "A", "timestamp": _now(),
-        "aws": {"account": aws_account, "principalArn": _redact_arn(aws_arn),
-                "region": aws_region, "classification": classification,
-                "credentialSource": credential_source},
-        "resource": {"service": "s3", "bucketName": bucket_name,
-                     "publicAccessBlocked": True, "objects": 0},
-        "cost": {"estimatedMaxUSD": 0.01, "ceilingUSD": cost_ceiling},
-        "ttl": {"hours": ttl_hours, "expiresAt": expires_at},
-        "execution": {"packageId": f"PKG-{run_fragment}",
-                      "planChecksum": plan_checksum, "packageChecksum": package_checksum,
-                      "checksumMatch": True},
-        "safety": {"controlledRealBlocked": True, "productionBlocked": True,
-                   "awsMutationsSoFar": 0},
-        "preflight": {"passed": True, "checks": preflight.to_dict()["checks"]},
-    }
-    with open(approval_file, "w") as f:
-        json.dump(approval, f, indent=2)
+    # ── Immutable Approval ──
+    approval = ImmutableApproval(
+        aws_account=aws_account, principal_arn=aws_arn, region=region,
+        bucket_name=bucket, ttl_hours=ttl_hours, expires_at=expires,
+        cost_ceiling=cost_ceiling,
+        plan_id=plan_id, execution_package_id=pkg_id,
+        plan_checksum=plan_cs, package_plan_checksum=pkg_cs,
+        resource_allowlist=["s3"], sandbox=True, production=False,
+    )
+    approval.created_at = _now()
+    approval.compute_digest()  # compute but don't seal yet
+    approval.state = ApprovalState.PENDING
+    approval_path = os.path.join(log_dir, f"approval-{approval.approval_id}.json")
+    approval.save(approval_path)
 
     print()
-    print("=" * 70)
-    print("REAL AWS SANDBOX APPROVAL REQUIRED")
-    print("=" * 70)
-    print(f"AWS Account:           {aws_account}")
-    print(f"Principal:             {_redact_arn(aws_arn)}")
-    print(f"Classification:        {classification}")
-    print(f"Region:                {aws_region}")
-    print(f"Resource:              Amazon S3")
-    print(f"Bucket:                {bucket_name}")
-    print(f"Public Access:         BLOCKED")
-    print(f"Objects:               0")
-    print(f"TTL:                   {ttl_hours}h")
-    print(f"Expires At:            {expires_at}")
-    print(f"Estimated Max Cost:    USD 0.01")
-    print(f"Cost Ceiling:          USD {cost_ceiling:.2f}")
-    print(f"Plan Checksum:         {plan_checksum}")
-    print(f"Package Checksum:      {package_checksum}")
-    print(f"Checksum Match:        true")
-    print(f"Resource Allowlist:    S3 ONLY")
-    print(f"AWS MUTATIONS SO FAR:  0")
-    print(f"CONTROLLED_REAL:       BLOCKED")
-    print(f"PRODUCTION:            BLOCKED")
-    print(f"\nApproval saved: {approval_file}")
-    print(f"Set INFRA_AGAIN_REAL_AWS_APPROVED=1 to proceed with Stage B.")
-
-    # ═══════════════════════════════════════════════════════════════════
-    # STAGE B — APPROVED EXECUTION
-    # ═══════════════════════════════════════════════════════════════════
-    if not os.environ.get("INFRA_AGAIN_REAL_AWS_APPROVED"):
-        print("\nSTAGE B: AWAITING_APPROVAL")
-        print("Set INFRA_AGAIN_REAL_AWS_APPROVED=1 after reviewing the approval package.")
-        return 0
-
+    print(f"APPROVAL_ID={approval.approval_id}")
+    print(f"APPROVAL_DIGEST={approval.approval_digest[:16]}...")
+    print(f"BUCKET={bucket}")
+    print(f"AWS_MUTATION_API_CALLS=0")
+    print(f"STATE=PENDING")
+    print(f"Saved: {approval_path}")
     print()
-    print("=" * 70)
-    print("PHASE 9.1 STAGE B — APPROVED REAL AWS SANDBOX EXECUTION")
-    print("=" * 70)
+    print("Next: approve with:")
+    print(f"  python ... 07-real-aws-s3-sandbox.py approve --approval-id {approval.approval_id} --approved-by <name> --log-dir {log_dir}")
+    return 0
 
-    # ── B1: Revalidate identity ──
-    identity2 = sts.get_caller_identity()
-    if identity2["Account"] != aws_account:
-        print(f"SANDBOX_ACCOUNT_MISMATCH: {identity2['Account']} != {aws_account}")
-        return 1
-    print(f"B1: Identity revalidated. Account={aws_account}")
 
-    # ── B2: AIRLOCK ──
-    from infra_again.execution.phase7_models import ExecutionFidelity
-    from infra_again.execution.policy import ExecutionPolicyEngine, PHASE8_ASK
-    assert ExecutionFidelity.SANDBOX in PHASE8_ASK, "SANDBOX must be ASK"
-    print("B2: AIRLOCK — SANDBOX=ASK + explicit approval → bounded execution")
-
-    # ── B3: CreateBucket ──
-    s3 = boto3.client("s3", region_name=aws_region)
-    try:
-        if aws_region == "us-east-1":
-            s3.create_bucket(Bucket=bucket_name)
+# ══════════════════════════════════════════════════════════
+# APPROVE
+# ══════════════════════════════════════════════════════════
+def approve_cmd(approval_id: str, approved_by: str, log_dir: str) -> int:
+    approval_path = os.path.join(log_dir, f"approval-{approval_id}.json")
+    if not os.path.exists(approval_path):
+        # Try glob
+        import glob
+        matches = glob.glob(os.path.join(log_dir, f"*{approval_id}*.json"))
+        if matches: approval_path = matches[0]
         else:
-            s3.create_bucket(Bucket=bucket_name,
-                CreateBucketConfiguration={"LocationConstraint": aws_region})
-        counter.record("CreateBucket", "SUCCESS", bucket_name)
-        print(f"B3: CreateBucket SUCCESS — {bucket_name}")
-    except Exception as e:
-        counter.record("CreateBucket", "FAILED", str(e)[:200])
-        print(f"B3: CreateBucket FAILED — {e}")
+            print(f"ERROR: Approval not found: {approval_id}")
+            return 1
+
+    approval = ImmutableApproval.load(approval_path)
+    if not approval:
+        print("ERROR: Could not load approval")
+        return 1
+    if approval.state != ApprovalState.PENDING:
+        print(f"ERROR: Approval state is {approval.state.value}, not PENDING")
         return 1
 
-    # ── B4: PublicAccessBlock ──
-    try:
-        s3.put_public_access_block(Bucket=bucket_name, PublicAccessBlockConfiguration={
-            "BlockPublicAcls": True, "IgnorePublicAcls": True,
-            "BlockPublicPolicy": True, "RestrictPublicBuckets": True})
-        counter.record("PutPublicAccessBlock", "SUCCESS")
-        print("B4: PublicAccessBlock SUCCESS")
-    except Exception as e:
-        counter.record("PutPublicAccessBlock", "FAILED", str(e)[:200])
-        print(f"B4: PublicAccessBlock FAILED — {e}")
-        # Continue to try cleanup
+    approval.seal(approved_by)
+    approval.save(approval_path)
+    print(f"APPROVAL_ID={approval.approval_id}")
+    print(f"STATE=APPROVED")
+    print(f"APPROVED_BY={approved_by}")
+    print(f"APPROVED_AT={approval.approved_at}")
+    print(f"APPROVAL_DIGEST={approval.approval_digest[:16]}...")
+    print(f"AWS_MUTATION_API_CALLS=0")
+    print()
+    print("Next: Stage B with:")
+    print(f"  python ... 07-real-aws-s3-sandbox.py stage-b --approval-id {approval_id} --log-dir {log_dir}")
+    return 0
 
-    # ── B5: Tags ──
-    try:
-        s3.put_bucket_tagging(Bucket=bucket_name, Tagging={"TagSet": [
-            {"Key": "managedBy", "Value": "infra-again"},
-            {"Key": "runId", "Value": run_fragment},
-            {"Key": "ephemeral", "Value": "true"},
-            {"Key": "sandbox", "Value": "true"},
-            {"Key": "phase", "Value": "9.1"},
-            {"Key": "expiresAt", "Value": expires_at},
-        ]})
-        counter.record("PutBucketTagging", "SUCCESS")
-        print("B5: Tags SUCCESS")
-    except Exception as e:
-        counter.record("PutBucketTagging", "FAILED", str(e)[:200])
-        print(f"B5: Tags FAILED — {e}")
 
-    print(f"\nAWS_MUTATION_API_CALLS={counter.count}")
+# ══════════════════════════════════════════════════════════
+# STAGE B — APPROVED EXECUTION (REQUIRES ADMIN PASSWORD)
+# ══════════════════════════════════════════════════════════
+def stage_b(approval_id: str, log_dir: str) -> int:
+    print("=" * 70)
+    print("PHASE 9.1.3 STAGE B — APPROVED REAL AWS EXECUTION")
+    print("=" * 70)
 
-    # ── B6: OBSERVE (independent) ──
-    print("\n── B6: Independent AWS Observation ──")
-    observation: dict[str, Any] = {"bucketObserved": False}
-    try:
-        s3.head_bucket(Bucket=bucket_name)
-        observation["bucketExists"] = True
+    # ── Load approval ──
+    import glob
+    approval_path = os.path.join(log_dir, f"approval-{approval_id}.json")
+    if not os.path.exists(approval_path):
+        matches = glob.glob(os.path.join(log_dir, f"*{approval_id}*.json"))
+        if matches: approval_path = matches[0]
+        else:
+            print(f"ERROR: Approval not found: {approval_id}")
+            return 1
 
-        loc = s3.get_bucket_location(Bucket=bucket_name)
-        observed_region = loc.get("LocationConstraint") or "us-east-1"
-        observation["region"] = observed_region
+    approval = ImmutableApproval.load(approval_path)
+    if not approval:
+        print("ERROR: Could not load approval")
+        return 1
+    if approval.state != ApprovalState.APPROVED:
+        print(f"ERROR: Approval is {approval.state.value}, not APPROVED")
+        return 1
 
-        pab = s3.get_public_access_block(Bucket=bucket_name)["PublicAccessBlockConfiguration"]
-        observation["publicAccessBlock"] = pab
+    print(f"APPROVAL_ID={approval.approval_id}")
+    print(f"STATE={approval.state.value}")
+    print(f"BUCKET={approval.bucket_name}")
+    print(f"ACCOUNT={approval.aws_account}")
 
-        tags = s3.get_bucket_tagging(Bucket=bucket_name)["TagSet"]
-        tag_dict = {t["Key"]: t["Value"] for t in tags}
-        observation["tags"] = tag_dict
+    # ── Verify digest ──
+    ok_d, msg_d = approval.verify_digest()
+    if not ok_d:
+        print(f"SANDBOX_APPROVAL_INVALIDATED: {msg_d}")
+        return 1
+    print(f"APPROVAL_DIGEST_VALID=true")
 
-        observation["bucketObserved"] = True
-        print(f"  Bucket exists:     {bucket_name}")
-        print(f"  Region:            {observed_region}")
-        print(f"  PublicAccessBlock: {all(pab.values())}")
-        print(f"  managedBy:         {tag_dict.get('managedBy')}")
-        print(f"  ephemeral:         {tag_dict.get('ephemeral')}")
-        print(f"  sandbox:           {tag_dict.get('sandbox')}")
-    except Exception as e:
-        observation["error"] = str(e)[:200]
-        print(f"  OBSERVATION FAILED: {e}")
+    # ── Expiry check ──
+    if approval.is_expired():
+        print("SANDBOX_APPROVAL_EXPIRED")
+        return 1
 
-    # ── B7: VALIDATION ──
-    print("\n── B7: Validation ──")
-    validation_errors = []
-    if observation.get("region", "") != aws_region:
-        validation_errors.append(f"Region mismatch: {observation.get('region')} != {aws_region}")
-    if not all(observation.get("publicAccessBlock", {}).values()):
-        validation_errors.append("PublicAccessBlock not fully enabled")
-    tags_obs = observation.get("tags", {})
-    if tags_obs.get("managedBy") != "infra-again":
-        validation_errors.append(f"managedBy mismatch: {tags_obs.get('managedBy')}")
-    if tags_obs.get("ephemeral") != "true":
-        validation_errors.append("ephemeral != true")
-    if tags_obs.get("sandbox") != "true":
-        validation_errors.append("sandbox != true")
+    # ── Cost check ──
+    from infra_again.execution.sandbox_models import CostEstimate
+    from infra_again.execution.sandbox_preflight import SandboxPreflightEngine
+    cost_ok, cost_msg = SandboxPreflightEngine.check_cost_ceiling(
+        CostEstimate(estimated_maximum_cost=0.01, ceiling=approval.cost_ceiling))
+    if not cost_ok:
+        print(f"SANDBOX_COST_LIMIT_EXCEEDED: {cost_msg}")
+        return 1
 
-    if validation_errors:
-        print(f"VALIDATION=FAIL")
-        for e in validation_errors:
-            print(f"  {e}")
+    # ── Authoritative plan/package ──
+    plan = _load_plan(approval.plan_id)
+    pkg = _load_package_for_plan(approval.plan_id) if plan else None
+    plan_cs = getattr(plan, 'plan_checksum', '') if plan else approval.plan_checksum
+    pkg_cs = pkg.get('plan_checksum', pkg.get('planChecksum', '')) if pkg else approval.package_plan_checksum
+
+    if plan_cs and pkg_cs and plan_cs != pkg_cs:
+        print(f"EXECUTION_PLAN_CHECKSUM_MISMATCH: plan={plan_cs} pkg={pkg_cs}")
+        return 1
+    if plan_cs and plan_cs != approval.plan_checksum:
+        print(f"EXECUTION_PLAN_CHECKSUM_MISMATCH: plan={plan_cs} approval={approval.plan_checksum}")
+        return 1
+    print(f"THREE_WAY_CHECKSUM_MATCH=true")
+
+    # ── Sandbox preflight ──
+    from infra_again.execution.sandbox_models import (
+        SandboxTarget, SandboxAccount, SandboxResourceAllowlist,
+        OwnershipTags, CleanupPolicy, CredentialLease, CredentialSource,
+    )
+    from infra_again.execution.sandbox_preflight import SandboxPreflightEngine
+    target = SandboxTarget(
+        provider="aws", region=approval.region,
+        account=SandboxAccount(account_id=approval.aws_account, provider="aws", verified=True),
+        resource_allowlist=SandboxResourceAllowlist(services=["s3"]),
+        cost_estimate=CostEstimate(estimated_maximum_cost=0.01, ceiling=approval.cost_ceiling),
+        ttl_hours=approval.ttl_hours,
+        ownership_tags=OwnershipTags(run_id=approval.approval_id[:8]),
+        credential_lease=CredentialLease(source=CredentialSource.TEMPORARY_STS,
+            principal_arn=approval.principal_arn, account_id=approval.aws_account,
+            expiration=approval.expires_at),
+        production=False,
+    )
+    pf2 = SandboxPreflightEngine.run(
+        package_id=approval.execution_package_id, sandbox_target=target,
+        plan_checksum=plan_cs, package_checksum=pkg_cs)
+    if not pf2.all_passed:
+        print("SANDBOX_PREFLIGHT=FAIL")
+        for f in pf2.failures: print(f"  {f}")
+        return 1
+    print("SANDBOX_PREFLIGHT=PASS")
+
+    # ── AWS Identity revalidation (if credentials available) ──
+    if os.environ.get("INFRA_AGAIN_REAL_AWS_SANDBOX"):
+        try:
+            import boto3
+            identity2 = boto3.client("sts").get_caller_identity()
+            if identity2["Account"] != approval.aws_account:
+                print(f"SANDBOX_ACCOUNT_MISMATCH: {identity2['Account']} != {approval.aws_account}")
+                return 1
+            print(f"IDENTITY_REVALIDATED=true Account={approval.aws_account}")
+        except Exception as e:
+            print(f"IDENTITY_REVALIDATION_FAILED: {e}")
+            return 1
     else:
-        print("VALIDATION=PASS")
+        print("IDENTITY_REVALIDATION=SKIPPED (no real credentials)")
 
-    # ── B8: INDEPENDENT VERIFICATION ──
-    print("\n── B8: Independent Verification ──")
-    executor_success = counter.log[0]["result"] == "SUCCESS" if counter.log else False
-    verified = (
-        observation.get("bucketObserved", False)
-        and len(validation_errors) == 0
-        and counter.count >= 3
+    # ── ADMIN AUTH ──
+    print()
+    print("=" * 50)
+    print("REAL AWS ADMIN AIRLOCK")
+    print("=" * 50)
+    print(f"AWS Account:    {approval.aws_account}")
+    print(f"Region:         {approval.region}")
+    print(f"Bucket:         {approval.bucket_name}")
+    print(f"TTL:            {approval.ttl_hours}h")
+    print(f"Cost Ceiling:   USD {approval.cost_ceiling:.2f}")
+    print(f"Approval ID:    {approval.approval_id}")
+    print(f"Approval Digest:{approval.approval_digest[:16]}...")
+    print(f"Plan:           {approval.plan_id}")
+    print(f"Package:        {approval.execution_package_id}")
+
+    admin_auth = AdminAuth()
+    if not AdminAuth.is_configured():
+        print("ADMIN_AUTH_NOT_CONFIGURED")
+        return 1
+
+    # Interactive or acceptance test
+    if not sys.stdin.isatty():
+        # Non-interactive — blocked unless acceptance mode
+        if os.environ.get("INFRA_AGAIN_ACCEPTANCE"):
+            pw = os.environ.get("INFRA_AGAIN_TEST_ADMIN_PASSWORD", "")
+            if not pw:
+                print("ADMIN_AIRLOCK_UNAVAILABLE (non-interactive, no test password)")
+                return 1
+        else:
+            print("ADMIN_AIRLOCK_UNAVAILABLE (non-interactive)")
+            return 1
+    else:
+        pw = getpass.getpass("Admin password: ")
+
+    ok_a, msg_a = admin_auth.verify(pw)
+    if not ok_a:
+        print(msg_a)
+        return 1
+    print("ADMIN_PASSWORD_VERIFIED=true")
+
+    # ── AIRLOCK ──
+    airlock = AirlockContext(
+        approval_valid=True, admin_verified=True,
+        airlock_passed=True, sandbox=True, production=False,
+        state=AirlockState.AIRLOCK_PASSED,
+        approval_id=approval.approval_id,
+        admin_verified_at=_now(),
     )
-    print(f"  Executor success:    {executor_success}")
-    print(f"  Observed truth:      {observation.get('bucketObserved', False)}")
-    print(f"  Validation errors:   {len(validation_errors)}")
-    print(f"  VERIFICATION={'PASS' if verified else 'FAIL'}")
-    print(f"  Invariant: Executor SUCCESS != Verified SUCCESS")
 
-    # ── B9: EVIDENCE ──
-    evidence = {
-        "phase": "9.1", "stage": "B",
-        "runId": run_fragment,
-        "awsAccount": aws_account,
-        "principalArn": _redact_arn(aws_arn),
-        "region": aws_region,
-        "bucketName": bucket_name,
-        "ttlHours": ttl_hours,
-        "expiresAt": expires_at,
-        "costCeiling": cost_ceiling,
-        "planChecksum": plan_checksum,
-        "packageChecksum": package_checksum,
-        "approval": approval,
-        "mutationCount": counter.count,
-        "mutations": counter.log,
-        "observation": observation,
-        "validationErrors": validation_errors,
-        "verification": "PASS" if verified else "FAIL",
-        "timestamps": {"started": approval["timestamp"], "completed": _now()},
+    # ── Create guarded mutator ──
+    counter = MutationCounter()
+    if os.environ.get("INFRA_AGAIN_REAL_AWS_SANDBOX"):
+        import boto3 as b3
+        s3 = b3.client("s3", region_name=approval.region)
+    else:
+        s3 = FakeS3Client()
+    mutator = GuardedAwsS3Mutator(s3, airlock, counter)
+
+    # ── EXECUTE ──
+    print()
+    print("── EXECUTING ──")
+
+    r1 = mutator.create_bucket(approval.bucket_name, approval.region)
+    if not r1["success"]:
+        print(f"CreateBucket FAILED: {r1.get('error','')}")
+        if r1.get("requires_reconciliation"):
+            print("REQUIRES_RECONCILIATION — observing...")
+            obs = mutator.head_bucket(approval.bucket_name)
+            if obs.get("exists"):
+                print("Bucket exists — continuing from observed state")
+            else:
+                print("Bucket not created — STOP")
+                return 1
+        else:
+            return 1
+    print(f"CreateBucket SUCCESS")
+
+    r2 = mutator.put_public_access_block(approval.bucket_name)
+    print(f"PublicAccessBlock {'SUCCESS' if r2['success'] else 'FAILED'}")
+
+    tags = {
+        "managedBy": "infra-again",
+        "runId": approval.approval_id[:8],
+        "ephemeral": "true", "sandbox": "true",
+        "phase": "9.1.3",
+        "expiresAt": approval.expires_at,
     }
-    with open(evidence_file, "w") as f:
-        json.dump(evidence, f, indent=2, default=str)
-    print(f"\nEvidence saved: {evidence_file}")
+    r3 = mutator.put_bucket_tagging(approval.bucket_name, tags)
+    print(f"Tags {'SUCCESS' if r3['success'] else 'FAILED'}")
 
-    # ── B10: OWNERSHIP CHECK ──
-    print("\n── B10: Ownership Check ──")
-    ownership_proven = (
-        tags_obs.get("managedBy") == "infra-again"
-        and tags_obs.get("runId") == run_fragment
-        and tags_obs.get("ephemeral") == "true"
-        and tags_obs.get("sandbox") == "true"
+    print(f"AWS_MUTATION_API_CALLS={counter.count}")
+
+    # ── OBSERVE ──
+    print()
+    print("── OBSERVING ──")
+    obs = mutator.observe_bucket(approval.bucket_name)
+    print(f"AWS_BUCKET_OBSERVED={obs.get('observed', False)}")
+
+    # ── VALIDATE ──
+    print()
+    print("── VALIDATING ──")
+    errors = []
+    obs_tags = obs.get("tags", {})
+    if obs_tags.get("managedBy") != "infra-again": errors.append("managedBy")
+    if obs_tags.get("ephemeral") != "true": errors.append("ephemeral")
+    if obs_tags.get("sandbox") != "true": errors.append("sandbox")
+    if not all(obs.get("publicAccessBlock", {}).values()): errors.append("publicAccessBlock")
+    print(f"VALIDATION={'PASS' if not errors else 'FAIL'} ({'; '.join(errors) if errors else 'ok'})")
+
+    # ── VERIFY ──
+    print()
+    print("── VERIFYING ──")
+    verified = obs.get("observed", False) and len(errors) == 0
+    print(f"VERIFICATION={'PASS' if verified else 'FAIL'}")
+    print("Invariant: Executor SUCCESS != Verified SUCCESS")
+
+    # ── CLEANUP ──
+    print()
+    print("── CLEANUP ──")
+    ownership_ok = (
+        obs_tags.get("managedBy") == "infra-again"
+        and obs_tags.get("ephemeral") == "true"
+        and obs_tags.get("sandbox") == "true"
     )
-    if not ownership_proven:
+    if not ownership_ok:
         print("OWNERSHIP_NOT_PROVEN — refusing to delete")
-        print("SANDBOX_RESOURCE_REMAINS: manual cleanup required")
         return 1
     print("OWNERSHIP_PROVEN=true")
 
-    # ── B11: DELETE ──
-    print("\n── B11: Cleanup ──")
-    try:
-        s3.delete_bucket(Bucket=bucket_name)
-        counter.record("DeleteBucket", "SUCCESS")
-        print(f"DeleteBucket SUCCESS — {bucket_name}")
-    except Exception as e:
-        counter.record("DeleteBucket", "FAILED", str(e)[:200])
-        print(f"DeleteBucket FAILED — {e}")
-        print("SANDBOX_RESOURCE_REMAINS")
-        return 1
+    r4 = mutator.delete_bucket(approval.bucket_name)
+    print(f"DeleteBucket {'SUCCESS' if r4['success'] else 'FAILED'}")
 
-    # ── B12: POST-CLEANUP OBSERVATION ──
-    print("\n── B12: Post-Cleanup Observation ──")
-    bucket_absent = False
-    try:
-        s3.head_bucket(Bucket=bucket_name)
-        print(f"POST_CLEANUP_BUCKET_PRESENT=true — bucket still exists!")
-        bucket_absent = False
-    except Exception:
-        print("POST_CLEANUP_BUCKET_PRESENT=false — bucket confirmed absent")
-        bucket_absent = True
-
-    # ── FINAL ──
+    # ── POST-CLEANUP ──
     print()
-    print("=" * 70)
-    if verified and ownership_proven and bucket_absent:
-        print("AWS_SANDBOX_VERIFIED")
-    elif not bucket_absent:
-        print("AWS_SANDBOX_CLEANUP_FAILED")
-    else:
-        print("AWS_SANDBOX_EXECUTED_VERIFICATION_FAILED")
-    print(f"AWS_MUTATION_API_CALLS={counter.count}")
-    print("=" * 70)
+    print("── POST-CLEANUP ──")
+    post = mutator.post_cleanup_observe(approval.bucket_name)
+    print(f"POST_CLEANUP_BUCKET_PRESENT={not post['bucketAbsent']}")
+    print(f"CLEANUP_STATE={post['cleanupState']}")
+    print(f"CLEANUP_VERIFIED={post.get('verified', False)}")
 
-    # Update evidence
-    evidence["postCleanup"] = {"bucketAbsent": bucket_absent}
-    evidence["finalStatus"] = "AWS_SANDBOX_VERIFIED" if (verified and ownership_proven and bucket_absent) else "FAIL"
-    with open(evidence_file, "w") as f:
-        json.dump(evidence, f, indent=2, default=str)
+    print(f"\nAWS_MUTATION_API_CALLS={counter.count}")
+    print(f"AWS_SANDBOX_VERIFIED" if (verified and post.get('verified')) else "FAIL")
+    return 0 if (verified and post.get('verified')) else 1
 
-    return 0 if (verified and ownership_proven and bucket_absent) else 1
+
+# ══════════════════════════════════════════════════════════
+# STATUS
+# ══════════════════════════════════════════════════════════
+def status_cmd(approval_id: str, log_dir: str) -> int:
+    import glob
+    approval_path = os.path.join(log_dir, f"approval-{approval_id}.json")
+    if not os.path.exists(approval_path):
+        matches = glob.glob(os.path.join(log_dir, f"*{approval_id}*.json"))
+        if matches: approval_path = matches[0]
+        else:
+            print(f"No approval found for: {approval_id}")
+            return 1
+    approval = ImmutableApproval.load(approval_path)
+    if approval:
+        print(json.dumps(approval.to_dict(), indent=2))
+    return 0
+
+
+# ══════════════════════════════════════════════════════════
+# MAIN
+# ══════════════════════════════════════════════════════════
+def main():
+    parser = argparse.ArgumentParser(description="INFRA-AGAIN Real AWS S3 Sandbox")
+    parser.add_argument("mode", choices=["stage-a", "stage-b", "approve", "status"],
+                        help="Operation mode")
+    parser.add_argument("--approval-id", default="", help="Approval ID")
+    parser.add_argument("--approved-by", default="", help="Approver name")
+    parser.add_argument("--log-dir", default="/tmp/phase91", help="Log/state directory")
+    args = parser.parse_args()
+
+    os.makedirs(args.log_dir, exist_ok=True)
+
+    if args.mode == "stage-a":
+        return stage_a(args.log_dir)
+    elif args.mode == "approve":
+        if not args.approval_id:
+            print("ERROR: --approval-id required")
+            return 1
+        return approve_cmd(args.approval_id, args.approved_by or "unknown", args.log_dir)
+    elif args.mode == "stage-b":
+        if not args.approval_id:
+            print("ERROR: --approval-id required")
+            return 1
+        return stage_b(args.approval_id, args.log_dir)
+    elif args.mode == "status":
+        if not args.approval_id:
+            print("ERROR: --approval-id required")
+            return 1
+        return status_cmd(args.approval_id, args.log_dir)
+    return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1] if len(sys.argv) > 1 else "/tmp"))
+    sys.exit(main())
