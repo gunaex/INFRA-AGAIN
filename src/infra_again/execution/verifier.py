@@ -2,6 +2,7 @@
 
 Validator: compares expected criteria against actual observations.
 Verifier: independent verification consuming observations, validations, and evidence.
+Ownership: resource cleanup safety.
 """
 
 from __future__ import annotations
@@ -12,6 +13,28 @@ from .phase7_models import (
     ExecutionValidation, ExecutionVerification, VerificationResult,
     ExecutionTask, ExecutionObservation,
 )
+
+
+def can_auto_cleanup(resource_metadata: dict[str, Any], current_run_id: str) -> bool:
+    """Check if a resource can be auto-cleaned up.
+
+    Required ALL conditions:
+    - managedBy == "infra-again"
+    - runId == currentRunId
+    - ephemeral == "true"
+    - acceptanceRun == "true"
+    """
+    managed_by = resource_metadata.get("managed_by", resource_metadata.get("managedBy", ""))
+    run_id = resource_metadata.get("run_id", resource_metadata.get("runId", ""))
+    ephemeral = str(resource_metadata.get("ephemeral", "")).lower()
+    acceptance = str(resource_metadata.get("acceptance_run", resource_metadata.get("acceptanceRun", ""))).lower()
+
+    return (
+        managed_by == "infra-again"
+        and run_id == current_run_id
+        and ephemeral == "true"
+        and acceptance == "true"
+    )
 
 
 class ExecutionValidator:
