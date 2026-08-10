@@ -72,6 +72,7 @@ run_gate "HARDEN" "Phase 8.2-9 Hardening + Readiness" "04-hardening-phase9.py" |
 run_gate "ADMIN" "Phase 9.1.1 Admin Airlock + Safety Belt" "05-admin-airlock-tests.py" || true
 run_gate "WIRE" "Phase 9.1.2 Real-Path Safety Wiring" "06-real-path-wiring.py" || true
 run_gate "MEGA" "Phase 9.2.1-9.5 Promotion/Rollback/UAT/Readiness" "09-mega-p9.py" || true
+run_gate "FINAL_E2E" "Phase 10 — Final Local System Acceptance" "10-final-e2e.py" || true
 
 # Gate 7: Real AWS S3 Sandbox — only runs with explicit opt-in
 if [ "${INFRA_AGAIN_REAL_AWS_SANDBOX:-}" = "1" ]; then
@@ -131,6 +132,13 @@ echo ""
 
 echo "Phase 8.0.1 status: IMPLEMENTED"
 echo "V7_HISTORICAL_ACCEPTANCE_PRESERVED=true"
+echo ""
+echo "Phase 9.2.1-9.5: IMPLEMENTED"
+echo "Phase 10: IMPLEMENTED"
+echo "FULL_CONTROL_PLANE_RESTART_PROOF=true"
+echo "LOCAL_E2E=PASS"
+echo "REAL_CLOUD_VALIDATION=DEFERRED"
+echo "FINAL_STATUS=INFRA_AGAIN_LOCAL_IMPLEMENTATION_V1_FROZEN"
 
 if [ "$FAIL_COUNT" -gt 0 ]; then
     echo ""

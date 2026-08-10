@@ -159,12 +159,27 @@ def load_rollback(rollback_id: str) -> Optional[dict]:
 
 def persist_uat(uat: dict) -> None:
     c = _conn()
-    c.execute("""INSERT OR REPLACE INTO uat_records VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
+    # Add columns if needed (migration-safe)
+    try:
+        c.execute("ALTER TABLE uat_records ADD COLUMN implementation_plan_id TEXT")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        c.execute("ALTER TABLE uat_records ADD COLUMN execution_package_id TEXT")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        c.execute("ALTER TABLE uat_records ADD COLUMN uat_digest TEXT")
+    except sqlite3.OperationalError:
+        pass
+    c.execute("""INSERT OR REPLACE INTO uat_records VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
         uat["uatId"], uat.get("promotionId",""), uat.get("environmentId",""),
         uat.get("scope",""), uat.get("acceptanceCriteria",""),
         uat.get("requestedBy",""), uat.get("performedBy",""), uat.get("approvedBy",""),
         uat.get("status","NOT_STARTED"), uat.get("uatEvidenceDigest",""),
         uat.get("startedAt",""), uat.get("completedAt",""), uat.get("expiresAt",""),
+        uat.get("implementationPlanId",""), uat.get("executionPackageId",""),
+        uat.get("uatDigest",""),
     ))
     c.commit()
     c.close()
@@ -182,6 +197,9 @@ def load_uat(uat_id: str) -> Optional[dict]:
         "requestedBy": d["requested_by"], "performedBy": d["performed_by"], "approvedBy": d["approved_by"],
         "status": d["status"], "uatEvidenceDigest": d["uat_evidence_digest"],
         "startedAt": d["started_at"], "completedAt": d["completed_at"], "expiresAt": d["expires_at"],
+        "implementationPlanId": d.get("implementation_plan_id",""),
+        "executionPackageId": d.get("execution_package_id",""),
+        "uatDigest": d.get("uat_digest",""),
     }
 
 
@@ -191,12 +209,23 @@ def load_uat(uat_id: str) -> Optional[dict]:
 
 def persist_readiness(rd: dict) -> None:
     c = _conn()
-    c.execute("""INSERT OR REPLACE INTO production_readiness VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""", (
+    # Migration-safe column additions
+    try:
+        c.execute("ALTER TABLE production_readiness ADD COLUMN warnings TEXT")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        c.execute("ALTER TABLE production_readiness ADD COLUMN dependency_digests TEXT")
+    except sqlite3.OperationalError:
+        pass
+    c.execute("""INSERT OR REPLACE INTO production_readiness VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
         rd["readinessId"], rd.get("promotionId",""), rd.get("environmentId",""),
         rd.get("planId",""), rd.get("packageId",""),
         rd.get("planChecksum",""), rd.get("packageChecksum",""),
         json.dumps(rd.get("blocks",[])), rd.get("readinessDecision",""),
         rd.get("readinessDigest",""), rd.get("evaluatedAt",""), rd.get("expiresAt",""),
+        json.dumps(rd.get("warnings",[])),
+        json.dumps(rd.get("dependencyDigests",{})),
     ))
     c.commit()
     c.close()
@@ -215,4 +244,54 @@ def load_readiness(readiness_id: str) -> Optional[dict]:
         "blocks": json.loads(d["blocks"]), "readinessDecision": d["readiness_decision"],
         "readinessDigest": d["readiness_digest"],
         "evaluatedAt": d["evaluated_at"], "expiresAt": d["expires_at"],
+        "warnings": json.loads(d.get("warnings","[]")),
+        "dependencyDigests": json.loads(d.get("dependency_digests","{}")),
     }
+
+
+# ══════════════════════════════════════════════════════════
+# List operations (for admin/diagnostics)
+# ══════════════════════════════════════════════════════════
+
+def list_promotions() -> list[dict]:
+    c = _conn()
+    rows = c.execute("SELECT promotion_id FROM promotion_packages ORDER BY created_at DESC").fetchall()
+    c.close()
+    result = []
+    for r in rows:
+        p = load_promotion(r["promotion_id"])
+        if p: result.append(p)
+    return result
+
+
+def list_rollbacks() -> list[dict]:
+    c = _conn()
+    rows = c.execute("SELECT rollback_id FROM rollback_plans ORDER BY created_at DESC").fetchall()
+    c.close()
+    result = []
+    for r in rows:
+        rb = load_rollback(r["rollback_id"])
+        if rb: result.append(rb)
+    return result
+
+
+def list_uats() -> list[dict]:
+    c = _conn()
+    rows = c.execute("SELECT uat_id FROM uat_records ORDER BY completed_at DESC").fetchall()
+    c.close()
+    result = []
+    for r in rows:
+        u = load_uat(r["uat_id"])
+        if u: result.append(u)
+    return result
+
+
+def list_readiness() -> list[dict]:
+    c = _conn()
+    rows = c.execute("SELECT readiness_id FROM production_readiness ORDER BY evaluated_at DESC").fetchall()
+    c.close()
+    result = []
+    for r in rows:
+        rd = load_readiness(r["readiness_id"])
+        if rd: result.append(rd)
+    return result
