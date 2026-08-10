@@ -290,12 +290,18 @@ class KindExecutor(ExecutionAdapter):
                 proc.communicate(stdin_data.encode() if stdin_data else None), timeout=30)
             return proc.returncode or 0, stdout.decode(errors="replace"), stderr.decode(errors="replace")
 
-        # Create namespace
+        # Create namespace with ownership labels
         ns_manifest = json.dumps({
             "apiVersion": "v1", "kind": "Namespace",
             "metadata": {
                 "name": ns_name,
-                "labels": {"app.kubernetes.io/managed-by": "INFRA_AGAIN", "correlation": correlation_id},
+                "labels": {
+                    "app.kubernetes.io/managed-by": "infra-again",
+                    "infra-again/run-id": correlation_id,
+                    "infra-again/ephemeral": "true",
+                    "infra-again/acceptance-run": "true",
+                    "correlation": correlation_id,
+                },
             },
         })
         exit_code, stdout, stderr = await _kubectl(ctx_args + ["apply", "-f", "-"], ns_manifest)
@@ -308,13 +314,13 @@ class KindExecutor(ExecutionAdapter):
             "apiVersion": "apps/v1", "kind": "Deployment",
             "metadata": {
                 "name": deploy_name, "namespace": ns_name,
-                "labels": {"app.kubernetes.io/managed-by": "INFRA_AGAIN", "correlation": correlation_id},
+                "labels": {"app.kubernetes.io/managed-by": "infra-again", "infra-again/run-id": correlation_id, "infra-again/ephemeral": "true", "correlation": correlation_id},
             },
             "spec": {
                 "replicas": 2,
                 "selector": {"matchLabels": {"app": deploy_name}},
                 "template": {
-                    "metadata": {"labels": {"app": deploy_name}},
+                    "metadata": {"labels": {"app": deploy_name, "app.kubernetes.io/managed-by": "infra-again", "infra-again/run-id": correlation_id}},
                     "spec": {"containers": [{"name": "nginx", "image": "nginx:alpine", "ports": [{"containerPort": 80}]}]},
                 },
             },
@@ -329,7 +335,7 @@ class KindExecutor(ExecutionAdapter):
             "apiVersion": "v1", "kind": "Service",
             "metadata": {
                 "name": svc_name, "namespace": ns_name,
-                "labels": {"app.kubernetes.io/managed-by": "INFRA_AGAIN", "correlation": correlation_id},
+                "labels": {"app.kubernetes.io/managed-by": "infra-again", "infra-again/run-id": correlation_id, "correlation": correlation_id},
             },
             "spec": {
                 "selector": {"app": deploy_name},
@@ -362,7 +368,7 @@ class KindExecutor(ExecutionAdapter):
                 dep_data = json.loads(stdout)
                 for item in dep_data.get("items", []):
                     labels = item["metadata"].get("labels", {})
-                    if labels.get("app.kubernetes.io/managed-by") == "INFRA_AGAIN":
+                    if labels.get("app.kubernetes.io/managed-by") in ("INFRA_AGAIN", "infra-again"):
                         name = item["metadata"]["name"]
                         ns = item["metadata"]["namespace"]
                         ready = item.get("status", {}).get("readyReplicas", 0)

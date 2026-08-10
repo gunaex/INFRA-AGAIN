@@ -103,7 +103,7 @@ class KubernetesPlatformAdapter:
                 dep_data = json.loads(deploy_result["stdout"])
                 for item in dep_data.get("items", []):
                     labels = item["metadata"].get("labels", {})
-                    if labels.get("app.kubernetes.io/managed-by") == "INFRA_AGAIN":
+                    if labels.get("app.kubernetes.io/managed-by") in ("INFRA_AGAIN", "infra-again"):
                         name = item["metadata"]["name"]
                         ns = item["metadata"]["namespace"]
                         ready = item.get("status", {}).get("readyReplicas", 0)
@@ -118,7 +118,7 @@ class KubernetesPlatformAdapter:
                 svc_data = json.loads(svc_result["stdout"])
                 for item in svc_data.get("items", []):
                     labels = item["metadata"].get("labels", {})
-                    if labels.get("app.kubernetes.io/managed-by") == "INFRA_AGAIN":
+                    if labels.get("app.kubernetes.io/managed-by") in ("INFRA_AGAIN", "infra-again"):
                         name = item["metadata"]["name"]
                         ns = item["metadata"]["namespace"]
                         observed["observed"][f"svc/{ns}/{name}"] = {
