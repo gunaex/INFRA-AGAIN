@@ -1,13 +1,15 @@
 """Infra Pulse + Design Review API Routes.
 
-Phase 5: Design lifecycle, flow simulation, acceptance baseline.
+Phase 5.0.1: Design lifecycle with SQLite persistence for restart durability.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
@@ -21,7 +23,182 @@ from .simulator import FlowSimulator, create_demo_flow
 from .reducer import reduce_state
 
 # ============================================================================
-# In-memory stores (Phase 5 local-only)
+# Persistence
+# ============================================================================
+
+import os as _os
+DB_PATH = _os.environ.get("INFRA_AGAIN_DB", str(Path(".ai/infra-again.db").resolve()))
+
+
+def _get_conn() -> sqlite3.Connection:
+    conn = sqlite3.connect(str(DB_PATH))
+    conn.row_factory = sqlite3.Row
+    _init_tables(conn)
+    return conn
+
+
+def _init_tables(conn: sqlite3.Connection) -> None:
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS flow_designs (
+            design_id TEXT PRIMARY KEY,
+            name TEXT DEFAULT '',
+            description TEXT DEFAULT '',
+            revision INTEGER DEFAULT 1,
+            status TEXT DEFAULT 'DRAFT',
+            requirements_checksum TEXT DEFAULT '',
+            architecture_checksum TEXT DEFAULT '',
+            flow_checksum TEXT DEFAULT '',
+            flow_json TEXT DEFAULT '',
+            accepted_at TEXT DEFAULT '',
+            accepted_by TEXT DEFAULT '',
+            created_at TEXT DEFAULT '',
+            updated_at TEXT DEFAULT ''
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS flow_design_change_requests (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            design_id TEXT NOT NULL,
+            comment TEXT DEFAULT '',
+            node_id TEXT DEFAULT '',
+            severity TEXT DEFAULT 'INFO',
+            timestamp TEXT DEFAULT '',
+            FOREIGN KEY (design_id) REFERENCES flow_designs(design_id)
+        )
+    """)
+    conn.commit()
+
+
+def _persist_design(design: DesignBaseline, flow: FlowDefinition | None = None) -> None:
+    conn = _get_conn()
+    try:
+        now = datetime.now(timezone.utc).isoformat()
+        conn.execute("""
+            INSERT OR REPLACE INTO flow_designs
+            (design_id, name, description, revision, status,
+             requirements_checksum, architecture_checksum, flow_checksum, flow_json,
+             accepted_at, accepted_by, created_at, updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """, (
+            design.design_id,
+            design.metadata.get("name", ""),
+            design.metadata.get("description", ""),
+            design.revision,
+            design.status.value,
+            design.requirements_checksum,
+            design.architecture_checksum,
+            design.flow_checksum,
+            json.dumps(flow.to_dict()) if flow else "",
+            design.accepted_at,
+            design.accepted_by,
+            design.created_at or now,
+            now,
+        ))
+        # Persist change requests
+        conn.execute("DELETE FROM flow_design_change_requests WHERE design_id=?", (design.design_id,))
+        for cr in design.change_requests:
+            conn.execute("""
+                INSERT INTO flow_design_change_requests (design_id, comment, node_id, severity, timestamp)
+                VALUES (?,?,?,?,?)
+            """, (design.design_id, cr.get("comment", ""), cr.get("nodeId", ""),
+                  cr.get("severity", "INFO"), cr.get("timestamp", "")))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _load_design(design_id: str) -> DesignBaseline | None:
+    conn = _get_conn()
+    try:
+        row = conn.execute("SELECT * FROM flow_designs WHERE design_id=?", (design_id,)).fetchone()
+        if not row:
+            return None
+        design = DesignBaseline(
+            design_id=row["design_id"],
+            revision=row["revision"],
+            status=DesignStatus(row["status"]) if row["status"] else DesignStatus.DRAFT,
+            requirements_checksum=row["requirements_checksum"] or "",
+            architecture_checksum=row["architecture_checksum"] or "",
+            flow_checksum=row["flow_checksum"] or "",
+            accepted_at=row["accepted_at"] or "",
+            accepted_by=row["accepted_by"] or "",
+            created_at=row["created_at"] or "",
+            metadata={"name": row["name"] or "", "description": row["description"] or ""},
+        )
+        # Load change requests
+        crs = conn.execute(
+            "SELECT * FROM flow_design_change_requests WHERE design_id=? ORDER BY id", (design_id,)
+        ).fetchall()
+        design.change_requests = [
+            {"comment": cr["comment"], "nodeId": cr["node_id"],
+             "severity": cr["severity"], "timestamp": cr["timestamp"]}
+            for cr in crs
+        ]
+        return design
+    finally:
+        conn.close()
+
+
+def _load_all_designs() -> list[DesignBaseline]:
+    conn = _get_conn()
+    try:
+        rows = conn.execute("SELECT design_id FROM flow_designs ORDER BY updated_at DESC").fetchall()
+        designs = []
+        for r in rows:
+            d = _load_design(r["design_id"])
+            if d:
+                designs.append(d)
+        return designs
+    finally:
+        conn.close()
+
+
+def _load_design_flow(design_id: str) -> FlowDefinition | None:
+    conn = _get_conn()
+    try:
+        row = conn.execute("SELECT flow_json FROM flow_designs WHERE design_id=?", (design_id,)).fetchone()
+        if row and row["flow_json"]:
+            data = json.loads(row["flow_json"])
+            return _reconstruct_flow(data)
+        return None
+    finally:
+        conn.close()
+
+
+def _reconstruct_flow(data: dict) -> FlowDefinition:
+    """Reconstruct FlowDefinition from persisted JSON."""
+    from .models import FlowNode, FlowEdge, FlowType, NodeCategory, FlowNodeState, FlowEdgeState
+    nodes = []
+    for nd in data.get("nodes", []):
+        cat = nd.get("category", "APPLICATION")
+        nodes.append(FlowNode(
+            node_id=nd.get("nodeId", ""), label=nd.get("label", ""),
+            description=nd.get("description", ""),
+            category=NodeCategory(cat) if cat in NodeCategory._value2member_map_ else NodeCategory.APPLICATION,
+            provider=nd.get("provider", ""), platform=nd.get("platform", ""),
+            state=FlowNodeState.IDLE,
+            position=nd.get("position", {"x": 0, "y": 0}),
+            group_id=nd.get("groupId", ""),
+        ))
+    edges = []
+    for ed in data.get("edges", []):
+        ft = ed.get("flowType", "REQUEST")
+        edges.append(FlowEdge(
+            edge_id=ed.get("edgeId", ""), source_id=ed.get("sourceId", ""),
+            target_id=ed.get("targetId", ""),
+            flow_type=FlowType(ft) if ft in FlowType._value2member_map_ else FlowType.REQUEST,
+            state=FlowEdgeState.IDLE, label=ed.get("label", ""),
+        ))
+    return FlowDefinition(
+        flow_id=data.get("flowId", ""), name=data.get("name", ""),
+        flow_type=FlowType.REQUEST, architecture_graph_id=data.get("architectureGraphId", ""),
+        entry_node_id=data.get("entryNodeId", ""), nodes=nodes, edges=edges,
+        groups=data.get("groups", []),
+    )
+
+
+# ============================================================================
+# In-memory caches (backed by SQLite)
 # ============================================================================
 
 _designs: dict[str, DesignBaseline] = {}
@@ -29,8 +206,20 @@ _flows: dict[str, FlowDefinition] = {}
 _simulations: dict[str, dict[str, Any]] = {}
 
 
+def _load_all_from_db() -> None:
+    """Load persisted designs into memory cache on startup."""
+    for d in _load_all_designs():
+        _designs[d.design_id] = d
+        flow = _load_design_flow(d.design_id)
+        if flow:
+            _flows[flow.flow_id] = flow
+
+
 def register_flow_routes(app: FastAPI) -> None:
     """Register all Phase 5 flow/design routes on an existing FastAPI app."""
+
+    # Load persisted state on startup
+    _load_all_from_db()
 
     # ------------------------------------------------------------------
     # Designs
@@ -78,6 +267,8 @@ def register_flow_routes(app: FastAPI) -> None:
             json.dumps([e.to_dict() for e in flow.edges], sort_keys=True).encode()
         ).hexdigest()[:16]
         d.status = DesignStatus.REVIEW_READY
+
+        _persist_design(d, flow)
 
         return {
             "design": d.to_dict(),
@@ -137,6 +328,8 @@ def register_flow_routes(app: FastAPI) -> None:
         if d.status not in (DesignStatus.REVIEW_READY, DesignStatus.USER_REVIEW):
             raise HTTPException(status_code=400, detail=f"Cannot accept design in status {d.status.value}")
         d.accept(accepted_by)
+        flow = next((f for f in _flows.values() if f.architecture_graph_id == design_id), None)
+        _persist_design(d, flow)
         return {"design": d.to_dict(), "note": "No real infrastructure will be created by this action."}
 
     @app.post("/api/v1/designs/{design_id}/request-change")
@@ -145,6 +338,8 @@ def register_flow_routes(app: FastAPI) -> None:
         if not d:
             raise HTTPException(status_code=404, detail="Design not found")
         d.request_change(comment, node_id, severity)
+        flow = next((f for f in _flows.values() if f.architecture_graph_id == design_id), None)
+        _persist_design(d, flow)
         return {"design": d.to_dict()}
 
     # ------------------------------------------------------------------

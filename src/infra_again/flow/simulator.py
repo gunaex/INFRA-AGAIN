@@ -144,6 +144,7 @@ class FlowSimulator:
         self._rng = random.Random(self.seed)
         self.events: list[FlowEvent] = []
         self._t_ms = 0
+        self._seq = 0
         self._config = SCENARIO_CONFIG.get(scenario, SCENARIO_CONFIG[ScenarioId.HAPPY_PATH.value])
 
     def simulate(self) -> list[FlowEvent]:
@@ -269,7 +270,10 @@ class FlowSimulator:
 
     def _emit(self, event_type: FlowEventType, node_id: str = "", edge_id: str = "",
               message: str = "", severity: Severity = Severity.INFO) -> None:
+        self._seq += 1
+        evt_id = f"evt-{self.flow.flow_id[:8]}-{self.scenario}-{self.seed}-{self._seq:04d}"
         evt = FlowEvent(
+            event_id=evt_id,
             flow_id=self.flow.flow_id,
             timestamp_ms=self._t_ms,
             event_type=event_type,

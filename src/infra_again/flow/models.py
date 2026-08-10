@@ -219,7 +219,7 @@ class FlowMetric:
 
 @dataclass
 class FlowEvent:
-    event_id: str = field(default_factory=lambda: f"evt-{uuid4().hex[:8]}")
+    event_id: str = ""  # Set deterministically by simulator
     flow_id: str = ""
     timestamp_ms: int = 0
     event_type: FlowEventType = FlowEventType.FLOW_STARTED
