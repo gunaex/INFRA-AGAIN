@@ -69,6 +69,17 @@ run_gate "G0" "Gate 0 — Computed Checksum Evidence" "01-gate0-checksum-enforce
 run_gate "G1-6" "Gates 1-6,15,17 — Sandbox Control" "02-sandbox-acceptance.py" || true
 run_gate "ISO" "Test Endpoint Isolation" "03-test-isolation.py" || true
 
+# Gate 7: Real AWS S3 Sandbox — only runs with explicit opt-in
+if [ "${INFRA_AGAIN_REAL_AWS_SANDBOX:-}" = "1" ]; then
+    run_gate "G7" "Gate 7 — Real AWS S3 Sandbox (STAGE A)" "07-real-aws-s3-sandbox.py" || true
+else
+    echo ""
+    echo -e "${YELLOW}━━━ G7: Real AWS S3 Sandbox ━━━${NC}"
+    echo "  REAL_AWS_SANDBOX=NOT_EXECUTED"
+    echo "  Set INFRA_AGAIN_REAL_AWS_SANDBOX=1 to run Stage A discovery."
+    echo -e "${CYAN}NOT_EXECUTED${NC}: G7 (no opt-in)"
+fi
+
 set -e
 
 # ============================================================================
