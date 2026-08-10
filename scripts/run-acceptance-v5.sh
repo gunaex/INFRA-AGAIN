@@ -12,27 +12,33 @@ rm -rf "$LOG_DIR"; mkdir -p "$LOG_DIR"
 
 REQ_PASS=0; REQ_FAIL=0; REQ_SKIP=0; OPT_NOT=0
 GT1=0; GT2=0; GT3=0; GT4=0; GT5=0; GT6=0
+GR1=""; GR2=""; GR3=""; GR4=""; GR5=""; GR6=""
+TOOL="$SCRIPT_DIR/acceptance/run_with_timeout.py"
 
 run_gate() {
-    local num="$1"; local name="$2"; local cmd="$3"
+    local num="$1"; local name="$2"; local cmd="$3"; local timeout="${4:-60}"
     echo ""
     printf "[%d/6] %-30s " "$num" "$name"
     local start=$(date +%s)
     local exit_code=0
-    bash -c "$cmd '$LOG_DIR'" > "$LOG_DIR/gate-$(printf '%02d' "$num").log" 2>&1 || exit_code=$?
+    python3.11 "$TOOL" --timeout "$timeout" -- bash -c "$cmd '$LOG_DIR'" > "$LOG_DIR/gate-$(printf '%02d' "$num").log" 2>&1 || exit_code=$?
     local elapsed=$(($(date +%s) - start))
     eval "GT$num=$elapsed"
+    local result="PASS"
+    if [ "$exit_code" -eq 124 ]; then result="TIMEOUT"; REQ_FAIL=$((REQ_FAIL + 1))
+    elif [ "$exit_code" -ne 0 ]; then result="FAIL"; REQ_FAIL=$((REQ_FAIL + 1))
+    else REQ_PASS=$((REQ_PASS + 1)); fi
+    eval "GR$num=\$result"
 
-    if [ "$exit_code" -eq 0 ]; then
+    if [ "$result" = "PASS" ]; then
         echo -e "${GREEN}PASS${NC} ${elapsed}s"
-        REQ_PASS=$((REQ_PASS + 1))
-        return 0
+    elif [ "$result" = "TIMEOUT" ]; then
+        echo -e "${RED}TIMEOUT${NC} ${elapsed}s (limit=${timeout}s)"
+        tail -5 "$LOG_DIR/gate-$(printf '%02d' "$num").log"
     else
         echo -e "${RED}FAIL${NC} ${elapsed}s"
-        REQ_FAIL=$((REQ_FAIL + 1))
         echo "  See: $LOG_DIR/gate-$(printf '%02d' "$num").log"
         tail -10 "$LOG_DIR/gate-$(printf '%02d' "$num").log"
-        return 1
     fi
 }
 
@@ -41,12 +47,12 @@ echo "Logs: $LOG_DIR"
 echo ""
 
 # ===========================================================================
-run_gate 1 "V4 regression"       "bash $GATES_DIR/01-v4-regression.sh" || true
-run_gate 2 "Flow domain"         "python3.11 $GATES_DIR/02-flow-domain.py" || true
-run_gate 3 "Flow scenarios"      "python3.11 $GATES_DIR/03-flow-scenarios.py" || true
-run_gate 4 "Design persistence"  "python3.11 $GATES_DIR/04-design-persistence.py" || true
-run_gate 5 "API runtime"         "python3.11 $GATES_DIR/05-api-runtime.py" || true
-run_gate 6 "Frontend build"      "bash $GATES_DIR/06-frontend.sh" || true
+run_gate 1 "V4 regression"       "bash $GATES_DIR/01-v4-regression.sh" 360 || true
+run_gate 2 "Flow domain"         "python3.11 $GATES_DIR/02-flow-domain.py" 30 || true
+run_gate 3 "Flow scenarios"      "python3.11 $GATES_DIR/03-flow-scenarios.py" 30 || true
+run_gate 4 "Design persistence"  "python3.11 $GATES_DIR/04-design-persistence.py" 30 || true
+run_gate 5 "API runtime"         "python3.11 $GATES_DIR/05-api-runtime.py" 90 || true
+run_gate 6 "Frontend build"      "bash $GATES_DIR/06-frontend.sh" 180 || true
 
 # ===========================================================================
 echo ""; echo "========================================"; echo "INFRA-AGAIN V5 ACCEPTANCE"; echo "========================================"
@@ -67,14 +73,14 @@ echo "TOTAL_DURATION = ${TOTAL_DUR}s"
 
 cat > "$LOG_DIR/summary.json" << EOFJSON
 {
-  "phase": "5.0.2",
+  "phase": "5.1",
   "gates": [
-    {"name":"v4-regression","durationSeconds":$GT1},
-    {"name":"flow-domain","durationSeconds":$GT2},
-    {"name":"flow-scenarios","durationSeconds":$GT3},
-    {"name":"design-persistence","durationSeconds":$GT4},
-    {"name":"api-runtime","durationSeconds":$GT5},
-    {"name":"frontend","durationSeconds":$GT6}
+    {"name":"v4-regression","result":"${GR1:-SKIP}","exitCode":0,"durationSeconds":$GT1},
+    {"name":"flow-domain","result":"${GR2:-SKIP}","exitCode":0,"durationSeconds":$GT2},
+    {"name":"flow-scenarios","result":"${GR3:-SKIP}","exitCode":0,"durationSeconds":$GT3},
+    {"name":"design-persistence","result":"${GR4:-SKIP}","exitCode":0,"durationSeconds":$GT4},
+    {"name":"api-runtime","result":"${GR5:-SKIP}","exitCode":0,"durationSeconds":$GT5},
+    {"name":"frontend","result":"${GR6:-SKIP}","exitCode":0,"durationSeconds":$GT6}
   ],
   "requiredPass": $REQ_PASS,
   "requiredFail": $REQ_FAIL,

@@ -4,6 +4,7 @@ import {
   type Node, type Edge, MarkerType,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
+import './styles/infraPulse.css';
 import PulseNode from './components/PulseNode';
 import PulseEdge from './components/PulseEdge';
 import FlowTimeline from './components/FlowTimeline';
@@ -183,49 +184,37 @@ export default function InfraPulsePage() {
   const scenarioList: ScenarioId[] = ['HAPPY_PATH','AUTH_FAILURE','FIREWALL_BLOCK','DATABASE_SLOW','API_TIMEOUT','APPROVAL_WAIT','RETRY_RECOVERY'];
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 60px)' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 60px)', background: '#1a1d23' }}>
       {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 16px',
-        borderBottom: '1px solid #e5e7eb', background: '#f9fafb' }}>
-        <h2 style={{ margin: 0, fontSize: 18, fontWeight: 700 }}>Infra Pulse</h2>
+      <div className="pulse-header">
+        <h2 className="pulse-header__title">Infra Pulse</h2>
         {!design ? (
-          <button onClick={createDesign} disabled={loading}
-            style={{ padding: '6px 16px', background: '#3b82f6', color: '#fff', border: 'none',
-              borderRadius: 6, cursor: 'pointer', fontWeight: 600 }}>
+          <button onClick={createDesign} disabled={loading} className="pulse-btn pulse-btn--primary">
             {loading ? 'Loading...' : 'Create Design'}
           </button>
         ) : (
           <>
-            <span style={{ fontSize: 12, color: '#6b7280' }}>{design.designId}</span>
-            <span style={{
-              padding: '2px 8px', borderRadius: 4, fontSize: 11, fontWeight: 600,
-              background: design.status === 'BASELINE_FROZEN' ? '#dcfce7' :
-                design.status === 'CHANGE_REQUESTED' ? '#fef3c7' : '#dbeafe',
-              color: design.status === 'BASELINE_FROZEN' ? '#166534' :
-                design.status === 'CHANGE_REQUESTED' ? '#92400e' : '#1e40af',
-            }}>
+            <span style={{ fontSize: 12, color: '#8b8fa3', fontFamily: 'monospace' }}>{design.designId}</span>
+            <span className={`pulse-badge ${
+              design.status === 'BASELINE_FROZEN' ? 'pulse-badge--frozen' :
+              design.status === 'CHANGE_REQUESTED' ? 'pulse-badge--change' :
+              design.status === 'REVIEW_READY' ? 'pulse-badge--review' : 'pulse-badge--draft'
+            }`}>
               {design.status.replace(/_/g, ' ')}
             </span>
+            <span className="pulse-sim-banner">⬤ SIMULATION</span>
           </>
         )}
         <div style={{ flex: 1 }} />
         <div style={{ display: 'flex', gap: 4 }}>
-          <button onClick={() => setView('flow')}
-            style={{ padding: '4px 12px', background: view === 'flow' ? '#3b82f6' : '#e5e7eb',
-              color: view === 'flow' ? '#fff' : '#374151', border: 'none', borderRadius: 4, cursor: 'pointer' }}>
-            Flow
-          </button>
-          <button onClick={() => setView('review')}
-            style={{ padding: '4px 12px', background: view === 'review' ? '#3b82f6' : '#e5e7eb',
-              color: view === 'review' ? '#fff' : '#374151', border: 'none', borderRadius: 4, cursor: 'pointer' }}>
-            Design Review
-          </button>
+          <button onClick={() => setView('flow')} className={`pulse-btn pulse-btn--sm ${view === 'flow' ? 'pulse-btn--primary' : 'pulse-btn--ghost'}`}>Flow</button>
+          <button onClick={() => setView('review')} className={`pulse-btn pulse-btn--sm ${view === 'review' ? 'pulse-btn--primary' : 'pulse-btn--ghost'}`}>Design Review</button>
         </div>
       </div>
 
       {!design ? (
-        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#6b7280' }}>
-          Click "Create Design" to generate an architecture and begin simulation.
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#8b8fa3', fontSize: 14 }}>
+          Click <strong>Create Design</strong> to generate an architecture and begin simulation.
         </div>
       ) : view === 'review' ? (
         <DesignReviewPanel design={design} onAccept={acceptDesign} onChangeRequest={requestChange} />
@@ -241,55 +230,55 @@ export default function InfraPulsePage() {
               onNodeClick={(_, node) => setSelectedNode(node.id)}
               nodesDraggable={false}
             >
-              <Background color="#f3f4f6" gap={20} />
+              <Background color="#2a2d35" gap={24} />
               <Controls />
-              <MiniMap nodeStrokeWidth={2} pannable zoomable />
+              <MiniMap nodeStrokeWidth={2} pannable zoomable style={{ background: '#22252d' }} />
             </ReactFlow>
             {/* Legend */}
-            <div style={{
-              position: 'absolute', bottom: 8, left: 8, background: 'rgba(255,255,255,0.9)',
-              borderRadius: 6, padding: '6px 10px', fontSize: 10, border: '1px solid #e5e7eb',
-            }}>
-              <div style={{ fontWeight: 600, marginBottom: 2 }}>Legend</div>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                {['REQUEST','DATA','AUTH','APPROVAL','RESPONSE','RETRY'].map((t) => (
-                  <span key={t} style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                    <span style={{ width: 8, height: 8, borderRadius: 2,
-                      background: {REQUEST:'#3b82f6',DATA:'#06b6d4',AUTH:'#8b5cf6',APPROVAL:'#a855f7',RESPONSE:'#10b981',RETRY:'#eab308'}[t] }} />
-                    {t}
+            <div className="pulse-legend">
+              <div style={{ fontWeight: 600, marginBottom: 4, color: '#b0b4c0' }}>Flow</div>
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                {[{l:'Request',c:'#3b82f6'},{l:'Data',c:'#06b6d4'},{l:'Auth',c:'#8b5cf6'},{l:'Approval',c:'#a855f7'},{l:'Response',c:'#10b981'},{l:'Retry',c:'#eab308'}].map(t => (
+                  <span key={t.l} className="pulse-legend__item">
+                    <span className="pulse-legend__swatch" style={{ background: t.c }} />{t.l}
                   </span>
                 ))}
               </div>
-              <div style={{ marginTop: 2, fontSize: 9, color: '#9ca3af' }}>
-                All metrics: SIMULATED — not live telemetry
+              <div style={{ marginTop: 6, fontWeight: 600, color: '#b0b4c0' }}>Status</div>
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                {[{l:'Pass',c:'#22c55e'},{l:'Active',c:'#3b82f6'},{l:'Waiting',c:'#a855f7'},{l:'Degraded',c:'#f97316'},{l:'Blocked',c:'#ef4444'},{l:'Not Reached',c:'#5c6072'}].map(t => (
+                  <span key={t.l} className="pulse-legend__item">
+                    <span className="pulse-legend__swatch" style={{ background: t.c }} />{t.l}
+                  </span>
+                ))}
+              </div>
+              <div style={{ marginTop: 6, fontSize: 9, color: '#5c6072' }}>
+                All values shown are simulated — not live telemetry
               </div>
             </div>
           </div>
 
           {/* Right sidebar */}
-          <div style={{ width: 280, borderLeft: '1px solid #e5e7eb', overflow: 'auto', padding: 12, background: '#fafafa' }}>
+          <div className="pulse-sidebar" style={{ width: 280 }}>
             <FlowScenarioSelector scenarios={scenarioList} current={scenario}
               onSelect={(s) => runSim(s as ScenarioId)} disabled={loading} />
 
-            <div style={{ display: 'flex', gap: 4, marginTop: 8, marginBottom: 8 }}>
+            <div style={{ display: 'flex', gap: 4, marginTop: 10, marginBottom: 8 }}>
               <button onClick={() => { setPlaying(!playing); if (playbackMs < 0) setPlaybackMs(0); }}
-                style={{ padding: '4px 10px', background: playing ? '#f97316' : '#22c55e', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontWeight: 600, fontSize: 11 }}>
+                className={`pulse-btn pulse-btn--sm ${playing ? 'pulse-btn--warning' : 'pulse-btn--success'}`}>
                 {playing ? '⏸ Pause' : '▶ Play'}
               </button>
               <button onClick={() => { setPlaying(false); setPlaybackMs(-1); events.length > 0 && applyState(simResult?.finalState!); }}
-                style={{ padding: '4px 10px', background: '#6b7280', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer', fontSize: 11 }}>
-                ↺ Reset
-              </button>
-              <select value={speed} onChange={(e) => setSpeed(Number(e.target.value))}
-                style={{ padding: '2px 4px', border: '1px solid #d1d5db', borderRadius: 4, fontSize: 11 }}>
+                className="pulse-btn pulse-btn--sm pulse-btn--ghost">↺ Reset</button>
+              <select value={speed} onChange={(e) => setSpeed(Number(e.target.value))} className="pulse-select">
                 <option value={0.5}>0.5x</option><option value={1}>1x</option>
                 <option value={2}>2x</option><option value={4}>4x</option>
               </select>
             </div>
 
             {simResult && (
-              <div style={{ fontSize: 10, color: '#6b7280', marginBottom: 8 }}>
-                Source: {simResult.source} | Duration: {simResult.durationMs}ms | Events: {events.length}
+              <div style={{ fontSize: 10, color: '#5c6072', marginBottom: 8 }}>
+                {simResult.source} | {simResult.durationMs}ms | {events.length} events
               </div>
             )}
 

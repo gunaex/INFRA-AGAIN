@@ -1,7 +1,6 @@
 import React, { memo } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
 import type { FlowNodeState, NodeCategory } from '../model/flowTypes';
-import { STATE_COLORS, STATE_LABELS } from '../model/flowTypes';
 
 interface PulseNodeData {
   label: string;
@@ -22,50 +21,35 @@ const CATEGORY_ICONS: Record<string, string> = {
 
 function PulseNode({ data, selected }: NodeProps) {
   const d = data as unknown as PulseNodeData;
-  const color = STATE_COLORS[d.state] || '#6b7280';
-  const icon = CATEGORY_ICONS[d.category] || '⬡';
-  const isBlocked = d.state === 'BLOCKED' || d.state === 'FAILED';
+  const stateClass = `pulse-node--${d.state.toLowerCase()}`;
   const isActive = d.state === 'ACTIVE' || d.state === 'RETRYING';
   const isDegraded = d.state === 'DEGRADED';
-  const isWaiting = d.state === 'WAITING';
-  const isPass = d.state === 'PASS' || d.state === 'COMPLETED';
-  const isIdle = d.state === 'IDLE' || d.state === 'NOT_REACHED';
+  const icon = CATEGORY_ICONS[d.category] || '⬡';
 
   return (
-    <div
-      className="pulse-node"
-      style={{
-        border: `2px solid ${color}`,
-        background: isBlocked ? '#fef2f2' : isActive ? '#eff6ff' :
-                    isWaiting ? '#faf5ff' : isDegraded ? '#fff7ed' :
-                    isPass ? '#f0fdf4' : isIdle ? '#f9fafb' : '#fff',
-        borderRadius: 8,
-        padding: '8px 14px',
-        minWidth: 120,
-        opacity: d.state === 'NOT_REACHED' ? 0.4 : 1,
-        boxShadow: selected ? `0 0 0 2px ${color}` : '0 1px 3px rgba(0,0,0,0.12)',
-        transition: 'border-color 0.3s, background 0.3s, opacity 0.3s',
-      }}
-    >
-      <Handle type="target" position={Position.Left} style={{ background: color }} />
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+    <div className={`pulse-node ${stateClass}`} style={{ boxShadow: selected ? '0 0 0 2px #60a5fa, 0 2px 8px rgba(0,0,0,0.4)' : undefined }}>
+      <Handle type="target" position={Position.Left} style={{ background: 'var(--text-secondary)', border: 'none' }} />
+      <div className="pulse-node__header">
         <span>{icon}</span>
-        <span style={{ fontWeight: 600, color: '#1f2937' }}>{d.label}</span>
+        <span>{d.label}</span>
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 4, fontSize: 10 }}>
-        <span style={{
-          display: 'inline-block', width: 6, height: 6, borderRadius: '50%', background: color,
-          animation: isActive ? 'pulse-dot 1s infinite' : 'none',
-        }} />
-        <span style={{ color }}>{STATE_LABELS[d.state] || d.state}</span>
+      <div className="pulse-node__status">
+        <span className={`pulse-node__status-dot ${isActive ? 'pulse-node__status-dot--active' : ''} ${isDegraded ? 'pulse-node__status-dot--degraded' : ''}`}
+          style={{
+            background: isActive ? '#3b82f6' : isDegraded ? '#f97316' :
+              d.state === 'PASS' || d.state === 'COMPLETED' ? '#22c55e' :
+              d.state === 'BLOCKED' || d.state === 'FAILED' ? '#ef4444' :
+              d.state === 'WAITING' ? '#a855f7' : '#5c6072',
+          }} />
+        <span>{d.state.replace(/_/g, ' ')}</span>
       </div>
       {d.latencyMs != null && (
-        <div style={{ fontSize: 10, color: '#6b7280', marginTop: 2 }}>{d.latencyMs} ms</div>
+        <div className="pulse-node__metric">{d.latencyMs} ms</div>
       )}
       {d.provider && (
-        <div style={{ fontSize: 9, color: '#9ca3af' }}>{d.provider}</div>
+        <div className="pulse-node__provider">{d.provider}</div>
       )}
-      <Handle type="source" position={Position.Right} style={{ background: color }} />
+      <Handle type="source" position={Position.Right} style={{ background: 'var(--text-secondary)', border: 'none' }} />
     </div>
   );
 }
