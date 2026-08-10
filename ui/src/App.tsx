@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import InfraPulsePage from './features/infra-pulse/InfraPulsePage';
 import ImplementationPlanPage from './features/implementation-planner/ImplementationPlanPage';
+import SandboxExecutionPage from './features/sandbox/SandboxExecutionPage';
 
-type View = 'dashboard' | 'plan' | 'run' | 'providers' | 'pulse' | 'impl';
+type View = 'dashboard' | 'plan' | 'run' | 'providers' | 'pulse' | 'impl' | 'sandbox';
 
 interface Target {
   target_type: string; name: string; provider: string; platform: string;
@@ -257,6 +258,7 @@ export default function App() {
     { key: 'providers', label: '🧠 Provider Intel' },
     { key: 'pulse', label: '💠 Infra Pulse' },
     { key: 'impl', label: '📋 Implementation Plan' },
+    { key: 'sandbox', label: '🛡️ Sandbox' },
   ];
 
   return <div>
@@ -272,5 +274,6 @@ export default function App() {
     {view === 'providers' && <ProviderIntel />}
     {view === 'pulse' && <InfraPulsePage />}
     {view === 'impl' && <ImplementationPlanPage />}
+    {view === 'sandbox' && <SandboxExecutionPage />}
   </div>;
 }
