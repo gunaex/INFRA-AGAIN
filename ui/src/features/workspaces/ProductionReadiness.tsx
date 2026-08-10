@@ -1,65 +1,62 @@
 
-import React, { useState, useEffect } from 'react';
-import { CheckCircle2, Activity, Shield, XCircle, AlertTriangle } from 'lucide-react';
+import { useState, useEffect } from 'react';
 import { api } from '../../lib/api';
 
 export default function ProductionReadiness() {
-  const [readiness, setReadiness] = useState<any[]>([]);
+  const [list, setList] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   useEffect(() => {
-    api.readinessList().then((d: any) => { setReadiness(d.readinessRecords || []); setLoading(false); }).catch(() => setLoading(false));
+    api.readinessList().then((d: any) => { setList(d.readinessRecords || []); setLoading(false); }).catch(() => setLoading(false));
   }, []);
-  if (loading) return <div className="loading-spinner"><Activity size={20} /></div>;
-  const latest = readiness[0];
+  if (loading) return <p className="text-gray-500 text-sm">Loading…</p>;
+  const latest = list[0];
 
   return (
-    <div>
-      <div style={{ marginBottom: 24 }}>
-        <div className="text-muted" style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 4 }}>Production Readiness</div>
-        <div style={{ fontSize: 20, fontWeight: 700 }}>Production Eligibility</div>
-        <div className="text-secondary text-sm" style={{ marginTop: 4 }}>Evaluates all gates. READY confirms eligibility only — PRODUCTION remains BLOCKED.</div>
+    <div className="space-y-6">
+      <div>
+        <p className="text-xs text-gray-400 uppercase tracking-wide">Production Readiness</p>
+        <h2 className="text-xl font-semibold text-gray-900">Production Eligibility</h2>
+        <p className="text-sm text-gray-500 mt-1">Evaluates all gates. READY confirms eligibility only — PRODUCTION remains BLOCKED.</p>
       </div>
 
-      {/* State Banner */}
-      <div className="card" style={{ marginBottom: 24, textAlign: 'center', padding: 32 }}>
-        <CheckCircle2 size={32} style={{ color: latest?.readinessDecision === 'READY' ? 'var(--status-verified)' : 'var(--status-blocked)', marginBottom: 12 }} />
-        <div style={{ fontSize: 24, fontWeight: 700, color: latest?.readinessDecision === 'READY' ? 'var(--status-verified)' : 'var(--status-blocked)' }}>
+      <div className="bg-white border border-gray-200 rounded-lg p-8 text-center">
+        <p className={`text-2xl font-bold ${latest?.readinessDecision==='READY'?'text-green-600':'text-red-600'}`}>
           {latest?.readinessDecision || 'NOT EVALUATED'}
+        </p>
+        <p className="text-sm text-gray-500 mt-2">Production Readiness Status</p>
+        <div className="mt-4">
+          <span className="px-3 py-1 rounded-full text-sm font-medium bg-red-100 text-red-700">PRODUCTION EXECUTION: BLOCKED</span>
         </div>
-        <div className="text-sm text-secondary" style={{ marginTop: 8 }}>Production Readiness Status</div>
-        <div style={{ marginTop: 16 }}>
-          <span className="badge badge-blocked" style={{ fontSize: 12, padding: '4px 16px' }}>
-            PRODUCTION EXECUTION: BLOCKED
-          </span>
-        </div>
-        <div className="text-xs text-muted" style={{ marginTop: 8 }}>Readiness confirms eligibility only. Explicit future Production AIRLOCK is still required.</div>
+        <p className="text-xs text-gray-400 mt-3">Readiness confirms eligibility only. Future Production AIRLOCK required.</p>
       </div>
 
-      {/* Blockers Checklist */}
       {latest && (
-        <div className="card">
-          <div className="card-title" style={{ marginBottom: 12 }}>Gate Evaluation</div>
-          <div className="checklist">
-            {(latest.blocks || []).map((b: string) => (
-              <div key={b} className="checklist-item fail">
-                <XCircle size={14} /> {b}
+        <div className="bg-white border border-gray-200 rounded-lg p-5">
+          <h3 className="text-sm font-semibold text-gray-700 mb-3">Gate Evaluation</h3>
+          <div className="space-y-1">
+            {(latest.blocks||[]).map((b:string) => (
+              <div key={b} className="flex items-center gap-2 text-sm text-red-600 px-3 py-1.5 rounded bg-red-50">
+                <span className="text-xs">✕</span> {b}
               </div>
             ))}
-            {(latest.warnings || []).map((w: string) => (
-              <div key={w} className="checklist-item warn">
-                <AlertTriangle size={14} /> {w}
+            {(latest.warnings||[]).map((w:string) => (
+              <div key={w} className="flex items-center gap-2 text-sm text-yellow-600 px-3 py-1.5 rounded bg-yellow-50">
+                <span className="text-xs">⚠</span> {w}
               </div>
             ))}
-            {(!latest.blocks || latest.blocks.length === 0) && (!latest.warnings || latest.warnings.length === 0) && (
-              <div className="checklist-item pass"><CheckCircle2 size={14} /> All gates passed</div>
+            {(!latest.blocks||latest.blocks.length===0) && (!latest.warnings||latest.warnings.length===0) && (
+              <div className="flex items-center gap-2 text-sm text-green-600 px-3 py-1.5 rounded bg-green-50">
+                <span className="text-xs">✓</span> All gates passed
+              </div>
             )}
           </div>
         </div>
       )}
 
-      {readiness.length === 0 && (
-        <div className="card">
-          <div className="empty-state"><Shield size={24} className="empty-state-icon" /><div className="empty-state-title">No readiness evaluation</div><div className="empty-state-desc">Evaluate production readiness with promotion, UAT, and rollback plan to see gate results.</div></div>
+      {list.length === 0 && (
+        <div className="bg-white border border-gray-200 rounded-lg p-10 text-center">
+          <p className="text-sm text-gray-400">No readiness evaluation yet.</p>
+          <p className="text-xs text-gray-400 mt-1">Evaluate with promotion, UAT, and rollback plan.</p>
         </div>
       )}
     </div>

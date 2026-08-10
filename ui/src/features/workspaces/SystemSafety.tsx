@@ -1,77 +1,64 @@
 
-import React from 'react';
-import { Shield, Activity, Lock, FileCheck, Eye, Key } from 'lucide-react';
-
 export default function SystemSafety() {
-  const safetyItems = [
-    { label: 'AdminAuth', desc: 'Argon2id/PBKDF2 password verification, max 3 attempts', icon: Key, status: 'IMPLEMENTED' },
-    { label: 'Immutable Approval', desc: 'SHA256 canonical digest, seal/verify/save/load', icon: FileCheck, status: 'IMPLEMENTED' },
-    { label: 'AIRLOCK', desc: 'State machine: DISCOVERY → AIRLOCK_PASSED → EXECUTING', icon: Lock, status: 'IMPLEMENTED' },
-    { label: 'Guarded Mutator', desc: 'Every S3 mutation asserts airlock first', icon: Shield, status: 'IMPLEMENTED' },
-    { label: 'Ownership Enforcement', desc: 'Exact resource ownership, no prefix delete, no wildcard', icon: Eye, status: 'IMPLEMENTED' },
+  const ladder = [
+    { level: 'PLAN_ONLY', policy: 'AUTO', blocked: false },
+    { level: 'SIMULATED', policy: 'AUTO', blocked: false },
+    { level: 'LOCAL_RUNTIME', policy: 'AUTO (isolated)', blocked: false },
+    { level: 'LOCAL_PRIVATE_CLOUD', policy: 'ASK', blocked: false },
+    { level: 'SANDBOX', policy: 'ASK', blocked: false },
+    { level: 'CONTROLLED_REAL', policy: 'BLOCK', blocked: true },
+    { level: 'PRODUCTION', policy: 'BLOCK', blocked: true },
   ];
 
-  const ladder = [
-    { level: 'PLAN_ONLY', policy: 'AUTO' },
-    { level: 'SIMULATED', policy: 'AUTO' },
-    { level: 'LOCAL_RUNTIME', policy: 'AUTO (isolated)' },
-    { level: 'LOCAL_PRIVATE_CLOUD', policy: 'ASK' },
-    { level: 'SANDBOX', policy: 'ASK' },
-    { level: 'CONTROLLED_REAL', policy: 'BLOCK' },
-    { level: 'PRODUCTION', policy: 'BLOCK' },
+  const belts = [
+    { label: 'AdminAuth', desc: 'Argon2id/PBKDF2 password verification, max 3 attempts' },
+    { label: 'Immutable Approval', desc: 'SHA256 canonical digest, seal/verify/save/load' },
+    { label: 'AIRLOCK', desc: 'State machine: DISCOVERY → AIRLOCK_PASSED → EXECUTING' },
+    { label: 'Guarded Mutator', desc: 'Every S3 mutation asserts airlock first' },
+    { label: 'Ownership Enforcement', desc: 'Exact resource ownership, no prefix delete' },
   ];
 
   return (
-    <div>
-      <div style={{ marginBottom: 24 }}>
-        <div className="text-muted" style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 4 }}>System Safety</div>
-        <div style={{ fontSize: 20, fontWeight: 700 }}>Safety Controls</div>
-        <div className="text-secondary text-sm" style={{ marginTop: 4 }}>Real cloud execution has NOT been performed. All safety belts are source-level verified.</div>
+    <div className="space-y-6">
+      <div>
+        <p className="text-xs text-gray-400 uppercase tracking-wide">System Safety</p>
+        <h2 className="text-xl font-semibold text-gray-900">Safety Controls</h2>
+        <p className="text-sm text-gray-500 mt-1">Real cloud execution has NOT been performed. All safety belts are source-level verified.</p>
       </div>
 
-      {/* Safety Ladder */}
-      <div className="card" style={{ marginBottom: 24 }}>
-        <div className="card-title" style={{ marginBottom: 16 }}>Safety Ladder</div>
-        <div className="flex-col gap-sm">
+      <div className="bg-white border border-gray-200 rounded-lg p-5">
+        <h3 className="text-sm font-semibold text-gray-700 mb-3">Safety Ladder</h3>
+        <div className="space-y-1">
           {ladder.map(s => (
-            <div key={s.level} className="flex-between" style={{ padding: '8px 12px', borderRadius: 'var(--radius-sm)', background: s.policy === 'BLOCK' ? 'var(--status-blocked-bg)' : s.policy === 'ASK' ? 'var(--status-ask-bg)' : 'transparent' }}>
-              <span className="text-sm">{s.level}</span>
-              <span className={`badge ${s.policy === 'BLOCK' ? 'badge-blocked' : s.policy === 'ASK' ? 'badge-ask' : 'badge-info'}`}>{s.policy}</span>
+            <div key={s.level} className={`flex justify-between px-3 py-2 rounded text-sm ${s.blocked ? 'bg-red-50' : 'bg-gray-50'}`}>
+              <span className="text-gray-700">{s.level}</span>
+              <span className={`px-2 py-0.5 rounded-full text-xs ${s.blocked ? 'bg-red-100 text-red-700' : s.policy==='ASK' ? 'bg-yellow-100 text-yellow-700' : 'bg-cyan-100 text-cyan-700'}`}>{s.policy}</span>
             </div>
           ))}
         </div>
       </div>
 
-      {/* Safety Belt Components */}
-      <div className="card">
-        <div className="card-title" style={{ marginBottom: 16 }}>Safety Belt Components</div>
-        <div className="flex-col gap-sm">
-          {safetyItems.map(s => {
-            const Icon = s.icon;
-            return (
-              <div key={s.label} className="flex-row gap-md" style={{ padding: '8px 12px', borderRadius: 'var(--radius-sm)', background: 'var(--bg-elevated)' }}>
-                <Icon size={16} style={{ color: 'var(--status-info)', flexShrink: 0 }} />
-                <div>
-                  <div className="text-sm" style={{ fontWeight: 600 }}>{s.label}</div>
-                  <div className="text-xs text-muted">{s.desc}</div>
-                </div>
-                <span className="badge badge-verified" style={{ marginLeft: 'auto' }}>{s.status}</span>
+      <div className="bg-white border border-gray-200 rounded-lg p-5">
+        <h3 className="text-sm font-semibold text-gray-700 mb-3">Safety Belt Components</h3>
+        <div className="space-y-2">
+          {belts.map(b => (
+            <div key={b.label} className="flex justify-between items-center px-3 py-2 rounded bg-gray-50 text-sm">
+              <div>
+                <p className="font-medium text-gray-700">{b.label}</p>
+                <p className="text-xs text-gray-400">{b.desc}</p>
               </div>
-            );
-          })}
+              <span className="px-2 py-0.5 rounded-full text-xs bg-green-100 text-green-700">IMPLEMENTED</span>
+            </div>
+          ))}
         </div>
       </div>
 
-      {/* Real Cloud Status */}
-      <div className="card" style={{ marginTop: 24, borderColor: 'var(--border-default)' }}>
-        <div className="flex-row gap-md">
-          <Activity size={16} style={{ color: 'var(--text-muted)' }} />
-          <div>
-            <div className="text-sm" style={{ fontWeight: 600 }}>Real Cloud Validation</div>
-            <div className="text-xs text-muted">DEFERRED. No AWS credentials configured. No real S3 operations performed. Implementation completeness does NOT imply real-cloud certification.</div>
-          </div>
-          <span className="badge badge-draft">DEFERRED</span>
+      <div className="border border-gray-200 bg-white rounded-lg p-5 flex items-center gap-4">
+        <div className="flex-1">
+          <p className="text-sm font-medium text-gray-700">Real Cloud Validation</p>
+          <p className="text-xs text-gray-400 mt-1">DEFERRED. No AWS credentials configured. No real S3 operations performed.</p>
         </div>
+        <span className="px-2 py-0.5 rounded-full text-xs bg-gray-100 text-gray-500">DEFERRED</span>
       </div>
     </div>
   );

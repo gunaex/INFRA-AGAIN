@@ -1,6 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
-import { FileSearch, Activity, Shield } from 'lucide-react';
+import { useState, useEffect } from 'react';
 import { api } from '../../lib/api';
 
 export default function EvidenceViewer() {
@@ -9,32 +8,35 @@ export default function EvidenceViewer() {
   useEffect(() => {
     api.runs().then((d: any) => { setRuns(d.runs || []); setLoading(false); }).catch(() => setLoading(false));
   }, []);
-  if (loading) return <div className="loading-spinner"><Activity size={20} /></div>;
-  const runsWithEvidence = runs.filter((r: any) => r.evidence || r.verification);
+  if (loading) return <p className="text-gray-500 text-sm">Loading…</p>;
+  const withEvidence = runs.filter((r: any) => r.evidence || r.verification);
+
   return (
-    <div>
-      <div style={{ marginBottom: 24 }}>
-        <div className="text-muted" style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 4 }}>Evidence Viewer</div>
-        <div style={{ fontSize: 20, fontWeight: 700 }}>Execution Evidence</div>
-        <div className="text-secondary text-sm" style={{ marginTop: 4 }}>Before state, after state, observed state, validation, verification. Evidence is first-class.</div>
+    <div className="space-y-6">
+      <div>
+        <p className="text-xs text-gray-400 uppercase tracking-wide">Evidence Viewer</p>
+        <h2 className="text-xl font-semibold text-gray-900">Execution Evidence</h2>
+        <p className="text-sm text-gray-500 mt-1">Before state, after state, observed state, validation, verification. Evidence is first-class.</p>
       </div>
-      <div className="card">
-        <div className="card-header"><div className="card-title">Evidence Records</div></div>
-        {runsWithEvidence.length === 0 ? (
-          <div className="empty-state"><FileSearch size={24} className="empty-state-icon" /><div className="empty-state-title">No evidence records</div><div className="empty-state-desc">Evidence is generated after execution, observation, validation, and verification complete.</div></div>
+      <div className="bg-white border border-gray-200 rounded-lg p-5">
+        <h3 className="text-sm font-semibold text-gray-700 mb-3">Evidence Records</h3>
+        {withEvidence.length === 0 ? (
+          <p className="text-sm text-gray-400 py-8 text-center">No evidence records. Evidence is generated after execution and verification.</p>
         ) : (
-          runsWithEvidence.map((r: any) => (
-            <div key={r.runId || r.id} className="card" style={{ marginBottom: 12 }}>
-              <div className="flex-between" style={{ marginBottom: 8 }}>
-                <span className="mono">{r.runId || r.id}</span>
-                <span className="badge badge-info">{r.status}</span>
+          <div className="space-y-3">
+            {withEvidence.map((r: any) => (
+              <div key={r.runId || r.id} className="border border-gray-100 rounded-lg p-4">
+                <div className="flex justify-between items-center mb-2">
+                  <span className="font-mono text-xs text-gray-500">{r.runId || r.id}</span>
+                  <span className="px-2 py-0.5 rounded-full text-xs bg-blue-100 text-blue-700">{r.status}</span>
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-xs text-gray-500">
+                  <div>Validation: {r.validation?.result || '-'}</div>
+                  <div>Verification: {r.verification?.result || '-'}</div>
+                </div>
               </div>
-              <div className="grid-2 text-sm">
-                <div><span className="text-muted">Validation: </span>{r.validation?.result || '-'}</div>
-                <div><span className="text-muted">Verification: </span>{r.verification?.result || '-'}</div>
-              </div>
-            </div>
-          ))
+            ))}
+          </div>
         )}
       </div>
     </div>

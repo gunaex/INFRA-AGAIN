@@ -1,6 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
-import { ClipboardCheck, Activity, Users } from 'lucide-react';
+import { useState, useEffect } from 'react';
 import { api } from '../../lib/api';
 
 export default function UatWorkspace() {
@@ -9,33 +8,40 @@ export default function UatWorkspace() {
   useEffect(() => {
     api.uats().then((d: any) => { setUats(d.uats || []); setLoading(false); }).catch(() => setLoading(false));
   }, []);
-  if (loading) return <div className="loading-spinner"><Activity size={20} /></div>;
+  if (loading) return <p className="text-gray-500 text-sm">Loading…</p>;
+
   return (
-    <div>
-      <div style={{ marginBottom: 24 }}>
-        <div className="text-muted" style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 4 }}>UAT Workspace</div>
-        <div style={{ fontSize: 20, fontWeight: 700 }}>User Acceptance Testing</div>
-        <div className="text-secondary text-sm" style={{ marginTop: 4 }}>Production eligibility requires UAT PASSED + separation of duties.</div>
+    <div className="space-y-6">
+      <div>
+        <p className="text-xs text-gray-400 uppercase tracking-wide">UAT Workspace</p>
+        <h2 className="text-xl font-semibold text-gray-900">User Acceptance Testing</h2>
+        <p className="text-sm text-gray-500 mt-1">Production eligibility requires UAT PASSED + separation of duties.</p>
       </div>
-      {/* SoD notice */}
-      <div className="card" style={{ marginBottom: 24, borderColor: 'var(--status-ask)', background: 'var(--status-ask-bg)' }}>
-        <div className="flex-row gap-sm">
-          <Users size={16} style={{ color: 'var(--status-ask)' }} />
-          <div>
-            <div className="text-sm" style={{ fontWeight: 600 }}>Separation of Duties</div>
-            <div className="text-xs text-secondary">Performer ≠ Approver. UAT PASSED after PASS is immutable — mutation invalidates.</div>
-          </div>
-        </div>
+      <div className="border border-yellow-200 bg-yellow-50 rounded-lg p-4 text-sm">
+        <p className="font-medium text-yellow-800">Separation of Duties</p>
+        <p className="text-yellow-700 text-xs mt-1">Performer ≠ Approver. UAT after PASS is immutable — mutation invalidates.</p>
       </div>
-      <div className="card">
-        <div className="card-header"><div className="card-title">UAT Records</div></div>
+      <div className="bg-white border border-gray-200 rounded-lg p-5">
+        <h3 className="text-sm font-semibold text-gray-700 mb-3">UAT Records</h3>
         {uats.length === 0 ? (
-          <div className="empty-state"><ClipboardCheck size={24} className="empty-state-icon" /><div className="empty-state-title">No UAT records</div><div className="empty-state-desc">Create UAT records with scope, acceptance criteria, and separation of duties.</div></div>
+          <p className="text-sm text-gray-400 py-8 text-center">No UAT records. Create with scope, criteria, and separation of duties.</p>
         ) : (
-          <table className="table-compact"><thead><tr><th>ID</th><th>Status</th><th>Performed By</th><th>Approved By</th><th>Completed</th></tr></thead><tbody>
-            {uats.map((u: any) => (
-              <tr key={u.uatId}><td className="mono">{u.uatId}</td><td><span className={`badge ${u.status === 'PASSED' ? 'badge-verified' : u.status === 'FAILED' ? 'badge-failure' : 'badge-draft'}`}>{u.status}</span></td><td>{u.performedBy || '-'}</td><td>{u.approvedBy || '-'}</td><td className="text-xs text-muted">{u.completedAt || '-'}</td></tr>
-            ))}</tbody></table>
+          <table className="w-full text-sm">
+            <thead><tr className="border-b border-gray-100 text-left text-xs text-gray-400 uppercase tracking-wider">
+              <th className="pb-2 pr-4">ID</th><th className="pb-2 pr-4">Status</th><th className="pb-2 pr-4">Performed By</th><th className="pb-2 pr-4">Approved By</th><th className="pb-2">Completed</th>
+            </tr></thead>
+            <tbody>
+              {uats.map((u: any) => (
+                <tr key={u.uatId} className="border-b border-gray-50">
+                  <td className="py-2 pr-4 font-mono text-xs text-gray-500">{u.uatId}</td>
+                  <td className="py-2 pr-4"><span className={`px-2 py-0.5 rounded-full text-xs ${u.status==='PASSED'?'bg-green-100 text-green-700':u.status==='FAILED'?'bg-red-100 text-red-700':'bg-gray-100 text-gray-600'}`}>{u.status}</span></td>
+                  <td className="py-2 pr-4 text-gray-600">{u.performedBy||'-'}</td>
+                  <td className="py-2 pr-4 text-gray-600">{u.approvedBy||'-'}</td>
+                  <td className="py-2 text-xs text-gray-400">{u.completedAt||'-'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         )}
       </div>
     </div>

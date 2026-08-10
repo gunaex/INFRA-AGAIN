@@ -1,10 +1,4 @@
-import React, { useState, useEffect, lazy, Suspense } from 'react';
-import {
-  LayoutDashboard, Box, FileText, Play, ShieldCheck, FileSearch,
-  ArrowUpRight, RotateCcw, ClipboardCheck, CheckCircle2,
-  Cpu, Settings, Activity
-} from 'lucide-react';
-import './styles/design-system.css';
+import { useState, Suspense, lazy } from 'react';
 
 const FlightDeck = lazy(() => import('./features/flight-deck/FlightDeck'));
 const ArchitectureWorkspace = lazy(() => import('./features/workspaces/ArchitectureWorkspace'));
@@ -22,95 +16,71 @@ type View = 'flight-deck' | 'architecture' | 'implementation' | 'execution'
   | 'evidence' | 'promotion' | 'recovery' | 'uat' | 'production-readiness'
   | 'provider-intel' | 'system';
 
-interface NavItem {
-  id: View;
-  label: string;
-  icon: React.ElementType;
-}
-
-const NAV_ITEMS: NavItem[] = [
-  { id: 'flight-deck', label: 'Flight Deck', icon: LayoutDashboard },
-  { id: 'architecture', label: 'Architecture', icon: Box },
-  { id: 'implementation', label: 'Implementation', icon: FileText },
-  { id: 'execution', label: 'Execution', icon: Play },
-  { id: 'evidence', label: 'Evidence', icon: FileSearch },
-  { id: 'promotion', label: 'Promotion', icon: ArrowUpRight },
-  { id: 'recovery', label: 'Recovery', icon: RotateCcw },
-  { id: 'uat', label: 'UAT', icon: ClipboardCheck },
-  { id: 'production-readiness', label: 'Prod Readiness', icon: CheckCircle2 },
-  { id: 'provider-intel', label: 'Providers', icon: Cpu },
-  { id: 'system', label: 'System', icon: Settings },
+const TABS: { id: View; label: string }[] = [
+  { id: 'flight-deck', label: 'Flight Deck' },
+  { id: 'architecture', label: 'Architecture' },
+  { id: 'implementation', label: 'Implementation' },
+  { id: 'execution', label: 'Execution' },
+  { id: 'evidence', label: 'Evidence' },
+  { id: 'promotion', label: 'Promotion' },
+  { id: 'recovery', label: 'Recovery' },
+  { id: 'uat', label: 'UAT' },
+  { id: 'production-readiness', label: 'Prod Readiness' },
+  { id: 'provider-intel', label: 'Providers' },
+  { id: 'system', label: 'System' },
 ];
-
-function LoadingSpinner() {
-  return <div className="loading-spinner"><Activity size={20} className="text-muted" /></div>;
-}
 
 export default function App() {
   const [view, setView] = useState<View>('flight-deck');
-  const [breadcrumb, setBreadcrumb] = useState('Flight Deck');
 
-  useEffect(() => {
-    const item = NAV_ITEMS.find(n => n.id === view);
-    setBreadcrumb(item?.label ?? 'Flight Deck');
-  }, [view]);
-
-  const renderWorkspace = () => {
-    return (
-      <Suspense fallback={<LoadingSpinner />}>
-        {view === 'flight-deck' && <FlightDeck onNavigate={setView} />}
-        {view === 'architecture' && <ArchitectureWorkspace />}
-        {view === 'implementation' && <ImplementationWorkspace />}
-        {view === 'execution' && <ExecutionCenter />}
-        {view === 'evidence' && <EvidenceViewer />}
-        {view === 'promotion' && <PromotionCenter />}
-        {view === 'recovery' && <RecoveryCenter />}
-        {view === 'uat' && <UatWorkspace />}
-        {view === 'production-readiness' && <ProductionReadiness />}
-        {view === 'provider-intel' && <ProviderIntelligence />}
-        {view === 'system' && <SystemSafety />}
-      </Suspense>
-    );
-  };
+  const renderWorkspace = () => (
+    <Suspense fallback={<p className="text-gray-500 text-sm p-6">Loading\u2026</p>}>
+      {view === 'flight-deck' && <FlightDeck onNavigate={setView} />}
+      {view === 'architecture' && <ArchitectureWorkspace />}
+      {view === 'implementation' && <ImplementationWorkspace />}
+      {view === 'execution' && <ExecutionCenter />}
+      {view === 'evidence' && <EvidenceViewer />}
+      {view === 'promotion' && <PromotionCenter />}
+      {view === 'recovery' && <RecoveryCenter />}
+      {view === 'uat' && <UatWorkspace />}
+      {view === 'production-readiness' && <ProductionReadiness />}
+      {view === 'provider-intel' && <ProviderIntelligence />}
+      {view === 'system' && <SystemSafety />}
+    </Suspense>
+  );
 
   return (
-    <div className="app-shell">
-      <nav className="nav-rail">
-        <div className="nav-rail-logo">
-          <Activity size={18} />
-        </div>
-        {NAV_ITEMS.map(item => {
-          const Icon = item.icon;
-          const active = view === item.id;
-          return (
-            <button
-              key={item.id}
-              className={`nav-rail-item${active ? ' active' : ''}`}
-              onClick={() => setView(item.id)}
-              title={item.label}
-            >
-              <Icon size={18} />
-            </button>
-          );
-        })}
-      </nav>
-
-      <div className="app-main">
-        <header className="topbar">
-          <span className="topbar-title">INFRA-AGAIN</span>
-          <span className="text-muted" style={{ fontSize: 10 }}>|</span>
-          <span className="topbar-breadcrumb">{breadcrumb}</span>
-          <div className="topbar-spacer" />
-          <div className="flex-row gap-sm">
-            <span className="badge badge-info" style={{ fontSize: 10 }}>SANDBOX: ASK</span>
-            <span className="badge badge-blocked" style={{ fontSize: 10 }}>CR: BLOCK</span>
-            <span className="badge badge-blocked" style={{ fontSize: 10 }}>PROD: BLOCK</span>
+    <div className="min-h-screen bg-gray-50">
+      <header className="bg-white border-b border-gray-200">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-4 flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <h1 className="text-lg font-semibold text-gray-900 truncate">INFRA-AGAIN</h1>
+            <div className="hidden sm:flex items-center gap-1.5">
+              <span className="px-1.5 py-0.5 text-[10px] uppercase tracking-wide rounded bg-cyan-100 text-cyan-700">SANDBOX: ASK</span>
+              <span className="px-1.5 py-0.5 text-[10px] uppercase tracking-wide rounded bg-red-100 text-red-700">CR: BLOCK</span>
+              <span className="px-1.5 py-0.5 text-[10px] uppercase tracking-wide rounded bg-red-100 text-red-700">PROD: BLOCK</span>
+            </div>
           </div>
-        </header>
-        <main className="workspace">
-          {renderWorkspace()}
-        </main>
-      </div>
+          <nav className="flex gap-1.5 flex-wrap">
+            {TABS.map(t => (
+              <button
+                key={t.id}
+                onClick={() => setView(t.id)}
+                className={`px-3 py-1.5 rounded-md text-sm font-medium transition ${
+                  view === t.id
+                    ? 'bg-cyan-600 text-white'
+                    : 'text-gray-600 hover:bg-gray-100'
+                }`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </nav>
+        </div>
+      </header>
+      <main className="max-w-6xl mx-auto px-4 sm:px-6 py-6">
+        {renderWorkspace()}
+      </main>
     </div>
   );
 }

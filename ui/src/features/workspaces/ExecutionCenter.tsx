@@ -1,6 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
-import { Play, Activity, Eye, ShieldCheck, FileSearch, CheckCircle2, FileText } from 'lucide-react';
+import { useState, useEffect } from 'react';
 import { api } from '../../lib/api';
 
 export default function ExecutionCenter() {
@@ -9,34 +8,47 @@ export default function ExecutionCenter() {
   useEffect(() => {
     api.runs().then((d: any) => { setRuns(d.runs || []); setLoading(false); }).catch(() => setLoading(false));
   }, []);
-  if (loading) return <div className="loading-spinner"><Activity size={20} /></div>;
+  if (loading) return <p className="text-gray-500 text-sm">Loading…</p>;
+
   return (
-    <div>
-      <div style={{ marginBottom: 24 }}>
-        <div className="text-muted" style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 4 }}>Execution Center</div>
-        <div style={{ fontSize: 20, fontWeight: 700 }}>Execution & Verification</div>
-        <div className="text-secondary text-sm" style={{ marginTop: 4 }}>Executor Success ≠ Verified Success. Every stage independently validated.</div>
+    <div className="space-y-6">
+      <div>
+        <p className="text-xs text-gray-400 uppercase tracking-wide">Execution Center</p>
+        <h2 className="text-xl font-semibold text-gray-900">Execution & Verification</h2>
+        <p className="text-sm text-gray-500 mt-1">Executor Success ≠ Verified Success. Every stage independently validated.</p>
       </div>
-      <div className="card" style={{ marginBottom: 24 }}>
-        <div className="card-title" style={{ marginBottom: 16 }}>Execution Pipeline</div>
-        <div className="grid-4">
-          {[{ label: 'PLAN', icon: FileText }, { label: 'EXECUTOR', icon: Play }, { label: 'OBSERVER', icon: Eye }, { label: 'VALIDATOR', icon: ShieldCheck }, { label: 'VERIFIER', icon: CheckCircle2 }, { label: 'EVIDENCE', icon: FileSearch }].map(s => (
-            <div key={s.label} className="card" style={{ textAlign: 'center' }}>
-              <s.icon size={20} style={{ marginBottom: 8, color: 'var(--text-muted)' }} />
-              <div className="text-xs text-muted" style={{ textTransform: 'uppercase', letterSpacing: '0.05em' }}>{s.label}</div>
+
+      <div className="bg-white border border-gray-200 rounded-lg p-5">
+        <h3 className="text-sm font-semibold text-gray-700 mb-3">Execution Pipeline</h3>
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
+          {['PLAN', 'EXECUTOR', 'OBSERVER', 'VALIDATOR', 'VERIFIER', 'EVIDENCE'].map(s => (
+            <div key={s} className="border border-gray-200 rounded-lg p-3 text-center">
+              <p className="text-xs text-gray-400 uppercase tracking-wide">{s}</p>
             </div>
           ))}
         </div>
       </div>
-      <div className="card">
-        <div className="card-header"><div className="card-title">Execution Runs</div></div>
+
+      <div className="bg-white border border-gray-200 rounded-lg p-5">
+        <h3 className="text-sm font-semibold text-gray-700 mb-3">Execution Runs</h3>
         {runs.length === 0 ? (
-          <div className="empty-state"><Play size={24} className="empty-state-icon" /><div className="empty-state-title">No execution runs</div><div className="empty-state-desc">Execute an approved implementation plan to see results here.</div></div>
+          <p className="text-sm text-gray-400 py-8 text-center">No execution runs. Execute an approved plan to see results.</p>
         ) : (
-          <table className="table-compact"><thead><tr><th>Run ID</th><th>Status</th><th>Validation</th><th>Verification</th><th>Fidelity</th></tr></thead><tbody>
-            {runs.map((r: any) => (
-              <tr key={r.runId || r.id}><td className="mono">{r.runId || r.id}</td><td><span className={`badge badge-${r.status === 'COMPLETED' ? 'verified' : 'info'}`}>{r.status}</span></td><td>{r.validation?.result || '-'}</td><td>{r.verification?.result || '-'}</td><td><span className="badge badge-draft">{r.fidelity || '-'}</span></td></tr>
-            ))}</tbody></table>
+          <table className="w-full text-sm">
+            <thead><tr className="border-b border-gray-100 text-left text-xs text-gray-400 uppercase tracking-wider">
+              <th className="pb-2 pr-4">Run ID</th><th className="pb-2 pr-4">Status</th><th className="pb-2 pr-4">Validation</th><th className="pb-2">Fidelity</th>
+            </tr></thead>
+            <tbody>
+              {runs.map((r: any) => (
+                <tr key={r.runId || r.id} className="border-b border-gray-50">
+                  <td className="py-2 pr-4 font-mono text-xs text-gray-500">{r.runId || r.id}</td>
+                  <td className="py-2 pr-4"><span className={`px-2 py-0.5 rounded-full text-xs ${r.status === 'COMPLETED' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'}`}>{r.status}</span></td>
+                  <td className="py-2 pr-4 text-gray-600">{r.validation?.result || '-'}</td>
+                  <td className="py-2"><span className="px-2 py-0.5 rounded-full text-xs bg-gray-100 text-gray-600">{r.fidelity || '-'}</span></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         )}
       </div>
     </div>

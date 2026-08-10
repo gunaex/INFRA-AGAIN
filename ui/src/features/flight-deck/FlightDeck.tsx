@@ -1,10 +1,27 @@
-import React, { useState, useEffect } from 'react';
-import {
-  Activity, ArrowRight, Shield, AlertTriangle, CheckCircle2,
-  Clock, Users, FileText, Play, FileSearch, ArrowUpRight,
-  RotateCcw, ClipboardCheck, Box
-} from 'lucide-react';
+import { useState, useEffect } from 'react';
 import { api } from '../../lib/api';
+
+function StatusBadge({ status }: { status: string }) {
+  const styles: Record<string, string> = {
+    APPROVED: 'bg-green-100 text-green-700',
+    PENDING_APPROVAL: 'bg-yellow-100 text-yellow-700',
+    CONSUMED: 'bg-blue-100 text-blue-700',
+    REJECTED: 'bg-red-100 text-red-700',
+    DRAFT: 'bg-gray-100 text-gray-600',
+    PASSED: 'bg-green-100 text-green-700',
+    FAILED: 'bg-red-100 text-red-700',
+    NOT_STARTED: 'bg-gray-100 text-gray-600',
+    ASK: 'bg-cyan-100 text-cyan-700',
+    BLOCK: 'bg-red-100 text-red-700',
+    BLOCKED: 'bg-red-100 text-red-700',
+    DEFERRED: 'bg-gray-100 text-gray-500',
+  };
+  return (
+    <span className={`px-2 py-0.5 rounded-full text-xs ${styles[status] || 'bg-gray-100 text-gray-600'}`}>
+      {status}
+    </span>
+  );
+}
 
 interface Props { onNavigate: (v: any) => void; }
 
@@ -27,7 +44,7 @@ export default function FlightDeck({ onNavigate }: Props) {
     });
   }, []);
 
-  if (loading) return <div className="loading-spinner"><Activity size={20} /></div>;
+  if (loading) return <p className="text-gray-500 text-sm">Loading\u2026</p>;
 
   const sb = envs.find((e: any) => e.classification === 'SANDBOX');
   const cr = envs.find((e: any) => e.classification === 'CONTROLLED_REAL');
@@ -35,75 +52,39 @@ export default function FlightDeck({ onNavigate }: Props) {
   const approvedPromos = promos.filter((p: any) => p.status === 'APPROVED');
   const pendingPromos = promos.filter((p: any) => p.status === 'PENDING_APPROVAL');
 
-  // Determine lifecycle state
-  const hasDesign = runs.length > 0;
-  const hasPlan = promos.length > 0;
   const hasExecution = runs.some((r: any) => r.status === 'COMPLETED');
-  const hasVerification = runs.some((r: any) => r.verification?.result === 'PASS');
   const hasPromotion = approvedPromos.length > 0;
 
-  type StageState = 'complete' | 'active' | 'blocked' | 'ask' | undefined;
-  const stages: { label: string; state: StageState }[] = [
-    { label: 'Design', state: hasDesign ? 'complete' : 'active' },
-    { label: 'Plan', state: hasPlan ? 'complete' : undefined },
-    { label: 'Execute', state: hasExecution ? 'complete' : hasPlan ? 'active' : undefined },
-    { label: 'Observe', state: hasExecution ? 'complete' : undefined },
-    { label: 'Validate', state: hasExecution ? 'complete' : undefined },
-    { label: 'Verify', state: hasVerification ? 'complete' : undefined },
-    { label: 'Evidence', state: hasVerification ? 'complete' : undefined },
-    { label: 'Promote', state: hasPromotion ? 'complete' : hasVerification ? 'active' : undefined },
-  ];
-
-  // Next action
   let nextAction = 'Create an Architecture Design to begin';
   let nextView: any = 'architecture';
-  if (hasDesign && !hasPlan) { nextAction = 'Implementation Plan requires approval'; nextView = 'implementation'; }
-  else if (hasPlan && !hasExecution) { nextAction = 'Execution package ready for AIRLOCK'; nextView = 'execution'; }
-  else if (hasExecution && !hasVerification) { nextAction = 'Verification evidence ready for review'; nextView = 'evidence'; }
-  else if (hasVerification && !hasPromotion) { nextAction = 'Promotion pending approval'; nextView = 'promotion'; }
+  if (hasExecution && !hasPromotion) { nextAction = 'Promotion pending approval'; nextView = 'promotion'; }
   else if (pendingPromos.length > 0) { nextAction = `${pendingPromos.length} promotion(s) awaiting approval`; nextView = 'promotion'; }
   else if (hasPromotion) { nextAction = 'Production readiness evaluation available'; nextView = 'production-readiness'; }
 
   return (
-    <div>
-      {/* Hero */}
-      <div style={{ marginBottom: 32 }}>
-        <div className="text-muted" style={{ fontSize: 11, textTransform: 'uppercase', letterSpacing: '0.1em', marginBottom: 8 }}>
-          Infrastructure Flight Deck
-        </div>
-        <div style={{ fontSize: 28, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 4 }}>
-          INFRA-AGAIN
-        </div>
-        <div className="text-secondary" style={{ fontSize: 14, maxWidth: 600 }}>
-          Infrastructure control center — Design, Plan, Execute, Verify, Promote.
-          Every stage independently validated. No single observer defines success.
-        </div>
+    <div className="space-y-6">
+      <div>
+        <p className="text-xs text-gray-400 uppercase tracking-wide">Infrastructure Flight Deck</p>
+        <h2 className="text-xl font-semibold text-gray-900">INFRA-AGAIN</h2>
+        <p className="text-sm text-gray-500 mt-1 max-w-2xl">
+          Infrastructure control center — Design, Plan, Execute, Verify, Promote. Every stage independently validated. No single observer defines success.
+        </p>
       </div>
 
       {/* Environment cards */}
-      <div className="grid-3" style={{ marginBottom: 24 }}>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         {[sb, cr, prod].map((env: any) => {
           if (!env) return null;
-          const isProd = env.classification === 'PRODUCTION';
-          const isCR = env.classification === 'CONTROLLED_REAL';
-          const badgeCls = isProd || isCR ? 'badge-blocked' : 'badge-info';
-          const badgeText = isProd || isCR ? 'BLOCKED' : 'ASK';
+          const isBlocked = env.classification === 'PRODUCTION' || env.classification === 'CONTROLLED_REAL';
           return (
-            <div key={env.environmentId} className="card">
-              <div className="flex-between" style={{ marginBottom: 12 }}>
-                <div className="card-title">{env.name || env.classification}</div>
-                <span className={`badge ${badgeCls}`}>{badgeText}</span>
+            <div key={env.environmentId} className="bg-white border border-gray-200 rounded-lg p-5">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="font-medium text-gray-900 text-sm">{env.name || env.classification}</h3>
+                <StatusBadge status={isBlocked ? 'BLOCK' : 'ASK'} />
               </div>
-              <div className="flex-col gap-xs text-sm text-secondary">
-                <div className="flex-row gap-sm">
-                  <Box size={12} /><span>{env.provider?.toUpperCase() || 'AWS'}</span>
-                </div>
-                <div className="flex-row gap-sm">
-                  <Activity size={12} /><span>{env.region || 'us-east-1'}</span>
-                </div>
-                <div className="flex-row gap-sm">
-                  <Shield size={12} /><span>Blast Radius: {env.blastRadius || 'N/A'}</span>
-                </div>
+              <div className="text-xs text-gray-500 space-y-1">
+                <div>{env.provider?.toUpperCase() || 'AWS'} · {env.region || 'us-east-1'}</div>
+                <div>Blast Radius: {env.blastRadius || 'N/A'}</div>
               </div>
             </div>
           );
@@ -111,126 +92,65 @@ export default function FlightDeck({ onNavigate }: Props) {
       </div>
 
       {/* Lifecycle Pipeline */}
-      <div className="card" style={{ marginBottom: 24 }}>
-        <div className="card-title" style={{ marginBottom: 16 }}>Lifecycle State</div>
-        <div className="pipeline">
-          {stages.map((s, i) => (
-            <React.Fragment key={s.label}>
-              {i > 0 && <div className={`pipeline-line${s.state === 'complete' ? ' complete' : ''}`} />}
-              <div className="pipeline-stage">
-                <div className={`pipeline-dot${s.state ? ` ${s.state}` : ''}`} />
-                <div className={`pipeline-label${s.state === 'active' ? ' active' : ''}`}>{s.label}</div>
+      <div className="bg-white border border-gray-200 rounded-lg p-5">
+        <h3 className="text-sm font-semibold text-gray-700 mb-3">Lifecycle State</h3>
+        <div className="flex items-center gap-0 overflow-x-auto">
+          {['Design', 'Plan', 'Execute', 'Observe', 'Validate', 'Verify', 'Evidence', 'Promote'].map((s, i) => {
+            const done = i < (hasPromotion ? 8 : hasExecution ? 3 : 0);
+            return (
+              <div key={s} className="flex items-center">
+                {i > 0 && <div className={`w-8 h-0.5 ${done ? 'bg-green-500' : 'bg-gray-200'}`} />}
+                <div className="flex flex-col items-center min-w-[64px]">
+                  <div className={`w-3 h-3 rounded-full border-2 ${done ? 'bg-green-500 border-green-500' : 'border-gray-300'}`} />
+                  <span className={`text-[9px] uppercase tracking-wider mt-1 ${done ? 'text-gray-700' : 'text-gray-400'}`}>{s}</span>
+                </div>
               </div>
-            </React.Fragment>
-          ))}
+            );
+          })}
         </div>
       </div>
 
-      {/* Next Action + Stats */}
-      <div className="grid-2" style={{ marginBottom: 24 }}>
-        <div className="card" style={{ cursor: 'pointer' }} onClick={() => onNavigate(nextView)}>
-          <div className="card-subtitle" style={{ marginBottom: 8 }}>NEXT ACTION</div>
-          <div style={{ fontSize: 16, fontWeight: 600, color: 'var(--status-info)', marginBottom: 8 }}>
-            {nextAction}
-          </div>
-          <div className="flex-row gap-xs text-sm" style={{ color: 'var(--status-info)' }}>
-            <ArrowRight size={14} /> Go to {NAV_LABELS[nextView] || 'workspace'}
-          </div>
-        </div>
-
-        <div className="card">
-          <div className="card-subtitle" style={{ marginBottom: 12 }}>SYSTEM SAFETY</div>
-          <div className="flex-col gap-sm">
-            {[
-              { label: 'SANDBOX', status: 'ASK', cls: 'badge-info' },
-              { label: 'CONTROLLED REAL', status: 'BLOCK', cls: 'badge-blocked' },
-              { label: 'PRODUCTION', status: 'BLOCK', cls: 'badge-blocked' },
-            ].map(s => (
-              <div key={s.label} className="flex-between">
-                <span className="text-sm text-secondary">{s.label}</span>
-                <span className={`badge ${s.cls}`}>{s.status}</span>
-              </div>
-            ))}
-            <div className="divider" style={{ margin: '4px 0' }} />
-            <div className="flex-between">
-              <span className="text-sm text-secondary">REAL CLOUD VALIDATION</span>
-              <span className="badge badge-draft">DEFERRED</span>
-            </div>
+      {/* Next Action + Safety */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <button onClick={() => onNavigate(nextView)} className="text-left bg-white border border-gray-200 rounded-lg p-5 hover:border-cyan-300 hover:shadow-md transition">
+          <p className="text-xs text-gray-400 uppercase tracking-wide mb-1">NEXT ACTION</p>
+          <p className="text-sm font-medium text-cyan-700">{nextAction}</p>
+          <p className="text-xs text-cyan-600 mt-2">Go to workspace \u2192</p>
+        </button>
+        <div className="bg-white border border-gray-200 rounded-lg p-5">
+          <p className="text-xs text-gray-400 uppercase tracking-wide mb-3">SYSTEM SAFETY</p>
+          <div className="space-y-2 text-sm">
+            <div className="flex justify-between"><span className="text-gray-600">SANDBOX</span><StatusBadge status="ASK" /></div>
+            <div className="flex justify-between"><span className="text-gray-600">CONTROLLED REAL</span><StatusBadge status="BLOCK" /></div>
+            <div className="flex justify-between"><span className="text-gray-600">PRODUCTION</span><StatusBadge status="BLOCK" /></div>
+            <div className="border-t border-gray-100 pt-2 flex justify-between"><span className="text-gray-600">REAL CLOUD VALIDATION</span><StatusBadge status="DEFERRED" /></div>
           </div>
         </div>
       </div>
 
-      {/* Quick Stats */}
-      <div className="grid-4">
-        <div className="card">
-          <div className="metric-value">{promos.length}</div>
-          <div className="metric-label">Promotions</div>
-          {pendingPromos.length > 0 && (
-            <div className="text-sm" style={{ color: 'var(--status-ask)', marginTop: 4 }}>
-              {pendingPromos.length} pending
-            </div>
-          )}
-        </div>
-        <div className="card">
-          <div className="metric-value">{runs.length}</div>
-          <div className="metric-label">Execution Runs</div>
-        </div>
-        <div className="card">
-          <div className="metric-value">{envs.length}</div>
-          <div className="metric-label">Environments</div>
-        </div>
-        <div className="card">
-          <div className="metric-value">{approvedPromos.length}</div>
-          <div className="metric-label">Approved</div>
-        </div>
+      {/* Stats */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        {[
+          { value: promos.length, label: 'Promotions', sub: pendingPromos.length > 0 ? `${pendingPromos.length} pending` : '' },
+          { value: runs.length, label: 'Execution Runs', sub: '' },
+          { value: envs.length, label: 'Environments', sub: '' },
+          { value: approvedPromos.length, label: 'Approved', sub: '' },
+        ].map(s => (
+          <div key={s.label} className="bg-white border border-gray-200 rounded-lg p-4">
+            <p className="text-2xl font-semibold text-gray-900">{s.value}</p>
+            <p className="text-xs text-gray-500 uppercase">{s.label}</p>
+            {s.sub && <p className="text-xs text-yellow-600 mt-1">{s.sub}</p>}
+          </div>
+        ))}
       </div>
 
-      {/* Recent Promotions */}
-      {promos.length > 0 && (
-        <>
-          <div className="section-title" style={{ marginTop: 32 }}>Recent Promotions</div>
-          <div className="card">
-            <table className="table-compact">
-              <thead><tr>
-                <th>ID</th><th>Source</th><th>Target</th><th>Status</th><th>Requested By</th>
-              </tr></thead>
-              <tbody>
-                {promos.slice(0, 5).map((p: any) => (
-                  <tr key={p.promotionId} style={{ cursor: 'pointer' }} onClick={() => onNavigate('promotion')}>
-                    <td className="mono">{p.promotionId}</td>
-                    <td>{p.sourceEnvClass}</td>
-                    <td>{p.targetEnvClass}</td>
-                    <td><span className={`badge badge-${p.status === 'APPROVED' ? 'verified' : p.status === 'PENDING_APPROVAL' ? 'ask' : p.status === 'CONSUMED' ? 'info' : 'draft'}`}>{p.status}</span></td>
-                    <td>{p.requestedBy || '-'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </>
-      )}
-
-      {/* Empty state for new installations */}
+      {/* Empty state */}
       {promos.length === 0 && runs.length === 0 && (
-        <div className="card" style={{ marginTop: 24 }}>
-          <div className="empty-state">
-            <Activity size={32} className="empty-state-icon" />
-            <div className="empty-state-title">No infrastructure activity yet</div>
-            <div className="empty-state-desc">
-              Start by creating an architecture design, then follow the lifecycle through planning, execution, verification, and promotion.
-            </div>
-          </div>
+        <div className="bg-white border border-gray-200 rounded-lg p-10 text-center">
+          <p className="text-gray-400 text-sm">No infrastructure activity yet.</p>
+          <p className="text-xs text-gray-400 mt-1">Start by creating an architecture design.</p>
         </div>
       )}
     </div>
   );
 }
-
-const NAV_LABELS: Record<string, string> = {
-  architecture: 'Architecture',
-  implementation: 'Implementation',
-  execution: 'Execution',
-  evidence: 'Evidence',
-  promotion: 'Promotion',
-  'production-readiness': 'Production Readiness',
-};
