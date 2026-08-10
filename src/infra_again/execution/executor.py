@@ -82,6 +82,8 @@ class PlanOnlyExecutor(ExecutionAdapter):
 
         if proc.returncode != 0:
             result["status"] = "FAILED"
+            result["error"] = stderr.decode(errors="replace")
+            result["reason"] = f"tofu init failed: {stderr.decode(errors='replace')[:200]}"
             return result
 
         # tofu plan
@@ -126,6 +128,7 @@ provider "aws" {{
   endpoints {{
     s3 = "http://localhost:4566"
   }}
+  s3_use_path_style = true
   access_key = "test"
   secret_key = "test"
   skip_credentials_validation = true
@@ -205,6 +208,7 @@ class FakecloudExecutor(ExecutionAdapter):
     @staticmethod
     def _generate_hcl(task: ExecutionTask, correlation_id: str) -> str:
         bucket_name = f"infra-again-{correlation_id[:8]}-{task.execution_task_id.lower()}"
+        bucket_name = bucket_name.lower().replace("_", "-")  # S3 requires lowercase
         return f"""# INFRA-AGAIN Phase 7 — FAKECLOUD SIMULATED
 terraform {{
   required_version = ">= 1.0"
@@ -215,6 +219,7 @@ provider "aws" {{
   endpoints {{
     s3 = "http://localhost:4566"
   }}
+  s3_use_path_style = true
   access_key = "test"
   secret_key = "test"
   skip_credentials_validation = true
@@ -269,67 +274,72 @@ class KindExecutor(ExecutionAdapter):
         result: dict[str, Any] = {"status": "EXECUTING", "outputs": [], "evidence": []}
 
         kubectl = shutil.which("kubectl") or "kubectl"
-        ns_name = f"infra-again-{correlation_id[:8]}"
+        # Use explicit context if available, fall back to default
+        ctx = target.environment_name or ""
+        ctx_args = ["--context", f"kind-{ctx}"] if ctx else []
+        ns_name = f"infra-again-{correlation_id[:8]}".lower()
+        deploy_name = f"app-{correlation_id[:8]}".lower()
+        svc_name = f"svc-{correlation_id[:8]}".lower()
+
+        async def _kubectl(args: list[str], stdin_data: str = "") -> tuple[int, str, str]:
+            proc = await asyncio.create_subprocess_exec(
+                kubectl, *args,
+                stdin=asyncio.subprocess.PIPE if stdin_data else None,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(stdin_data.encode() if stdin_data else None), timeout=30)
+            return proc.returncode or 0, stdout.decode(errors="replace"), stderr.decode(errors="replace")
 
         # Create namespace
-        ns_manifest = {
+        ns_manifest = json.dumps({
             "apiVersion": "v1", "kind": "Namespace",
             "metadata": {
                 "name": ns_name,
                 "labels": {"app.kubernetes.io/managed-by": "INFRA_AGAIN", "correlation": correlation_id},
             },
-        }
-        proc = await asyncio.create_subprocess_exec(
-            kubectl, "apply", "-f", "-",
-            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-        stdout, stderr = await asyncio.wait_for(
-            proc.communicate(json.dumps(ns_manifest).encode()), timeout=30)
-        result["outputs"].append({"command": "apply-namespace", "exit": proc.returncode,
-                                   "stdout": stdout.decode(errors="replace")})
+        })
+        exit_code, stdout, stderr = await _kubectl(ctx_args + ["apply", "-f", "-"], ns_manifest)
+        result["outputs"].append({"command": "apply-namespace", "exit": exit_code, "stdout": stdout})
+        if exit_code != 0:
+            result["status"] = "FAILED"; result["error"] = stderr; return result
 
         # Create deployment
-        deploy_manifest = {
+        deploy_manifest = json.dumps({
             "apiVersion": "apps/v1", "kind": "Deployment",
             "metadata": {
-                "name": f"app-{correlation_id[:8]}", "namespace": ns_name,
+                "name": deploy_name, "namespace": ns_name,
                 "labels": {"app.kubernetes.io/managed-by": "INFRA_AGAIN", "correlation": correlation_id},
             },
             "spec": {
                 "replicas": 2,
-                "selector": {"matchLabels": {"app": f"app-{correlation_id[:8]}"}},
+                "selector": {"matchLabels": {"app": deploy_name}},
                 "template": {
-                    "metadata": {"labels": {"app": f"app-{correlation_id[:8]}"}},
+                    "metadata": {"labels": {"app": deploy_name}},
                     "spec": {"containers": [{"name": "nginx", "image": "nginx:alpine", "ports": [{"containerPort": 80}]}]},
                 },
             },
-        }
-        proc = await asyncio.create_subprocess_exec(
-            kubectl, "apply", "-f", "-",
-            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-        stdout, stderr = await asyncio.wait_for(
-            proc.communicate(json.dumps(deploy_manifest).encode()), timeout=60)
-        result["outputs"].append({"command": "apply-deployment", "exit": proc.returncode,
-                                   "stdout": stdout.decode(errors="replace")})
+        })
+        exit_code, stdout, stderr = await _kubectl(ctx_args + ["apply", "-f", "-"], deploy_manifest)
+        result["outputs"].append({"command": "apply-deployment", "exit": exit_code, "stdout": stdout})
+        if exit_code != 0:
+            result["status"] = "FAILED"; result["error"] = stderr; return result
 
         # Create service
-        svc_manifest = {
+        svc_manifest = json.dumps({
             "apiVersion": "v1", "kind": "Service",
             "metadata": {
-                "name": f"svc-{correlation_id[:8]}", "namespace": ns_name,
+                "name": svc_name, "namespace": ns_name,
                 "labels": {"app.kubernetes.io/managed-by": "INFRA_AGAIN", "correlation": correlation_id},
             },
             "spec": {
-                "selector": {"app": f"app-{correlation_id[:8]}"},
+                "selector": {"app": deploy_name},
                 "ports": [{"port": 80, "targetPort": 80}],
             },
-        }
-        proc = await asyncio.create_subprocess_exec(
-            kubectl, "apply", "-f", "-",
-            stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-        stdout, stderr = await asyncio.wait_for(
-            proc.communicate(json.dumps(svc_manifest).encode()), timeout=30)
-        result["outputs"].append({"command": "apply-service", "exit": proc.returncode,
-                                   "stdout": stdout.decode(errors="replace")})
+        })
+        exit_code, stdout, stderr = await _kubectl(ctx_args + ["apply", "-f", "-"], svc_manifest)
+        result["outputs"].append({"command": "apply-service", "exit": exit_code, "stdout": stdout})
+        if exit_code != 0:
+            result["status"] = "FAILED"; result["error"] = stderr; return result
 
         result["status"] = "COMPLETED"
         result["namespace"] = ns_name
@@ -339,12 +349,13 @@ class KindExecutor(ExecutionAdapter):
         """Observe kind cluster via kubectl."""
         import shutil
         kubectl = shutil.which("kubectl") or "kubectl"
+        ctx = target.environment_name or ""
+        ctx_args = ["--context", f"kind-{ctx}"] if ctx else []
         observed: dict[str, Any] = {}
 
         try:
-            # Get deployments
             proc = await asyncio.create_subprocess_exec(
-                kubectl, "get", "deployments", "--all-namespaces", "-o", "json",
+                kubectl, *ctx_args, "get", "deployments", "--all-namespaces", "-o", "json",
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
             stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=15)
             if proc.returncode == 0:

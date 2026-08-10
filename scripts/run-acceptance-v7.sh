@@ -25,9 +25,9 @@ run_gate 1 "V6 regression"              "bash $GATES_DIR/01-v6-regression.sh" 12
 run_gate 2 "Execution models"           "python3.11 $GATES_DIR/02-execution-models.py" 30 || true
 run_gate 3 "Plan mapper"                "python3.11 $GATES_DIR/03-plan-mapper.py" 30 || true
 run_gate 4 "Preflight + Policy"         "python3.11 $GATES_DIR/04-preflight-policy.py" 30 || true
-run_gate 5 "Plan-only execution"        "python3.11 $GATES_DIR/05-plan-only.py" 90 || true
-run_gate 6 "Fakecloud model"            "python3.11 $GATES_DIR/06-fakecloud.py" 30 || true
-run_gate 7 "Kind model"                 "python3.11 $GATES_DIR/07-kind.py" 30 || true
+run_gate 5 "Plan-only execution"        "python3.11 $GATES_DIR/05-plan-only.py" 120 || true
+run_gate 6 "Fakecloud execution"        "python3.11 $GATES_DIR/06-fakecloud-execution.py" 180 || true
+run_gate 7 "Kind execution"             "python3.11 $GATES_DIR/07-kind-execution.py" 240 || true
 run_gate 8 "Safety blocks"              "python3.11 $GATES_DIR/08-safety-blocks.py" 30 || true
 run_gate 9 "Idempotency"                "python3.11 $GATES_DIR/09-idempotency.py" 60 || true
 run_gate 10 "Runner loss"               "python3.11 $GATES_DIR/10-runner-loss.py" 30 || true
