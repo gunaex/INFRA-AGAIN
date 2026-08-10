@@ -1,279 +1,116 @@
-import React, { useState, useEffect } from 'react';
-import InfraPulsePage from './features/infra-pulse/InfraPulsePage';
-import ImplementationPlanPage from './features/implementation-planner/ImplementationPlanPage';
-import SandboxExecutionPage from './features/sandbox/SandboxExecutionPage';
+import React, { useState, useEffect, lazy, Suspense } from 'react';
+import {
+  LayoutDashboard, Box, FileText, Play, ShieldCheck, FileSearch,
+  ArrowUpRight, RotateCcw, ClipboardCheck, CheckCircle2,
+  Cpu, Settings, Activity
+} from 'lucide-react';
+import './styles/design-system.css';
 
-type View = 'dashboard' | 'plan' | 'run' | 'providers' | 'pulse' | 'impl' | 'sandbox';
+const FlightDeck = lazy(() => import('./features/flight-deck/FlightDeck'));
+const ArchitectureWorkspace = lazy(() => import('./features/workspaces/ArchitectureWorkspace'));
+const ImplementationWorkspace = lazy(() => import('./features/workspaces/ImplementationWorkspace'));
+const ExecutionCenter = lazy(() => import('./features/workspaces/ExecutionCenter'));
+const EvidenceViewer = lazy(() => import('./features/workspaces/EvidenceViewer'));
+const PromotionCenter = lazy(() => import('./features/workspaces/PromotionCenter'));
+const RecoveryCenter = lazy(() => import('./features/workspaces/RecoveryCenter'));
+const UatWorkspace = lazy(() => import('./features/workspaces/UatWorkspace'));
+const ProductionReadiness = lazy(() => import('./features/workspaces/ProductionReadiness'));
+const ProviderIntelligence = lazy(() => import('./features/workspaces/ProviderIntelligence'));
+const SystemSafety = lazy(() => import('./features/workspaces/SystemSafety'));
 
-interface Target {
-  target_type: string; name: string; provider: string; platform: string;
-  mode: string; status: string; fidelity: Record<string, string>; description: string;
+type View = 'flight-deck' | 'architecture' | 'implementation' | 'execution'
+  | 'evidence' | 'promotion' | 'recovery' | 'uat' | 'production-readiness'
+  | 'provider-intel' | 'system';
+
+interface NavItem {
+  id: View;
+  label: string;
+  icon: React.ElementType;
 }
 
-interface Capability {
-  capability_id: string; name: string; provider: string; platform: string;
-  lifecycle: string; fidelity: string; targets: string[];
-  is_safe_to_execute: boolean; notes: string;
-}
+const NAV_ITEMS: NavItem[] = [
+  { id: 'flight-deck', label: 'Flight Deck', icon: LayoutDashboard },
+  { id: 'architecture', label: 'Architecture', icon: Box },
+  { id: 'implementation', label: 'Implementation', icon: FileText },
+  { id: 'execution', label: 'Execution', icon: Play },
+  { id: 'evidence', label: 'Evidence', icon: FileSearch },
+  { id: 'promotion', label: 'Promotion', icon: ArrowUpRight },
+  { id: 'recovery', label: 'Recovery', icon: RotateCcw },
+  { id: 'uat', label: 'UAT', icon: ClipboardCheck },
+  { id: 'production-readiness', label: 'Prod Readiness', icon: CheckCircle2 },
+  { id: 'provider-intel', label: 'Providers', icon: Cpu },
+  { id: 'system', label: 'System', icon: Settings },
+];
 
-interface Run {
-  run_id: string; correlation_id: string; state: string;
-  provider: string; platform: string; execution_mode: string;
-  created_at: string;
-}
-
-interface ArchNode { id: string; label: string; type: string; status: string; provider?: string; }
-interface ArchEdge { source: string; target: string; relationship: string; }
-interface ArchGraph { graph_type: string; nodes: ArchNode[]; edges: ArchEdge[]; metadata: Record<string, any>; }
-
-interface ArchDiff { entries: Array<{node_id: string; action: string; detail: string}>; summary: string; match_count: number; missing_count: number; unexpected_count: number; }
-
-const API = (typeof import.meta !== 'undefined' && (import.meta as any)?.env?.VITE_API_URL) || '';
-
-async function fetchJson(url: string) { const r = await fetch(API + url); return r.json(); }
-
-const STATUS_COLORS: Record<string, string> = {
-  READY: '#22c55e', NOT_INSTALLED: '#6b7280', NOT_CONFIGURED: '#9ca3af',
-  UNAVAILABLE: '#ef4444', OFFLINE: '#f59e0b', BLOCKED: '#ef4444',
-  VERIFIED: '#22c55e', SUPPORTED: '#22c55e', DISCOVERED: '#3b82f6',
-  UNVERIFIED: '#9ca3af', PLAN_ONLY: '#3b82f6', SIMULATED: '#f59e0b',
-  LOCAL_RUNTIME: '#22c55e', OBSERVED: '#3b82f6', VALIDATED: '#22c55e',
-  MISSING: '#ef4444', FAILED: '#ef4444', DRIFT: '#f59e0b',
-  PLANNED: '#6b7280', PROPOSED: '#9ca3af',
-};
-
-function StatusBadge({ status }: { status: string }) {
-  return <span style={{ background: STATUS_COLORS[status] || '#6b7280', color: '#fff', padding: '2px 8px', borderRadius: 4, fontSize: 12 }}>{status}</span>;
-}
-
-interface Runner { runnerId: string; name: string; version: string; os: string; status: string; capabilities?: Record<string, any>; }
-
-interface ProviderSvc { provider: string; serviceId: string; displayName: string; category: string; lifecycle: string; executionSupport: string[]; isExecutable: boolean; isSafeToExecute: boolean; }
-
-interface Candidate { provider: string; serviceId: string; fit: string; executionSupport: string[]; lifecycle: string; confidence: number; selectionReason: string; }
-
-function ProviderIntel() {
-  const [services, setServices] = useState<ProviderSvc[]>([]);
-  const [compareCap, setCompareCap] = useState('OBJECT_STORAGE');
-  const [candidates, setCandidates] = useState<Candidate[]>([]);
-
-  useEffect(() => {
-    fetchJson('/api/v1/providers/AWS/services').then(d => setServices(d.services || []));
-  }, []);
-
-  const runCompare = async (cap: string) => {
-    const r = await fetch(API + '/api/v1/capabilities/compare', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({capability: cap}) });
-    const d = await r.json();
-    setCandidates(d.candidates || []);
-    setCompareCap(cap);
-  };
-
-  const caps = ['OBJECT_STORAGE','RELATIONAL_DATABASE','KUBERNETES','CONTAINER_RUNTIME','COMPUTE_VM','SERVERLESS'];
-
-  return <div style={{padding:24,fontFamily:'system-ui'}}>
-    <h2>🧠 Provider Intelligence</h2>
-
-    <h3>AWS Services ({services.length})</h3>
-    <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(220px,1fr))',gap:8}}>
-      {services.map(s => <div key={s.serviceId} style={{border:'1px solid #e5e7eb',borderRadius:6,padding:10,fontSize:13}}>
-        <strong>{s.displayName}</strong> <StatusBadge status={s.lifecycle} />
-        <div style={{color:'#6b7280'}}>{s.category} · {s.serviceId}</div>
-        <div style={{marginTop:4,display:'flex',gap:4,flexWrap:'wrap'}}>
-          {(s.executionSupport||[]).map(e => <span key={e} style={{fontSize:11,padding:'2px 6px',background:s.isExecutable?'#dcfce7':'#f3f4f6',borderRadius:4}}>{e}</span>)}
-        </div>
-      </div>)}
-    </div>
-
-    <h3 style={{marginTop:24}}>🔍 Provider Comparison</h3>
-    <div style={{display:'flex',gap:8,marginBottom:12}}>
-      {caps.map(c => <button key={c} onClick={() => runCompare(c)} style={{padding:'6px 12px',background:compareCap===c?'#3b82f6':'#f3f4f6',color:compareCap===c?'#fff':'#374151',border:'none',borderRadius:6,cursor:'pointer',fontSize:12}}>{c.replace(/_/g,' ')}</button>)}
-    </div>
-    {candidates.length > 0 && <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(280px,1fr))',gap:12}}>
-      {candidates.map((c,i) => <div key={i} style={{border:'1px solid #e5e7eb',borderRadius:8,padding:14}}>
-        <div style={{display:'flex',justifyContent:'space-between'}}>
-          <strong>{c.provider} · {c.serviceId}</strong>
-          <StatusBadge status={c.lifecycle} />
-        </div>
-        <div style={{fontSize:13,color:'#6b7280',marginTop:4}}>Fit: {c.fit} · Confidence: {Math.round(c.confidence*100)}%</div>
-        <div style={{marginTop:4,display:'flex',gap:4,flexWrap:'wrap'}}>
-          {(c.executionSupport||[]).map(e => <span key={e} style={{fontSize:11,padding:'2px 6px',background:'#eff6ff',borderRadius:4}}>{e}</span>)}
-        </div>
-        <div style={{fontSize:12,marginTop:6,color:'#374151'}}>{c.selectionReason}</div>
-      </div>)}
-    </div>}
-  </div>;
-}
-
-function Dashboard() {
-  const [targets, setTargets] = useState<Target[]>([]);
-  const [caps, setCaps] = useState<Capability[]>([]);
-  const [runs, setRuns] = useState<Run[]>([]);
-  const [runners, setRunners] = useState<Runner[]>([]);
-
-  useEffect(() => {
-    fetchJson('/api/v1/targets').then(d => setTargets(d.targets || []));
-    fetchJson('/api/v1/capabilities?verified_only=true').then(d => setCaps(d.capabilities || []));
-    fetchJson('/api/v1/runs').then(d => setRuns((d.runs || []).slice(0, 10)));
-    fetchJson('/api/v1/runners').then(d => setRunners(d.runners || [])).catch(() => {});
-  }, []);
-
-  return <div style={{ padding: 24, fontFamily: 'system-ui' }}>
-    <h1 style={{ margin: 0 }}>🏗️ INFRA-AGAIN</h1>
-    <p style={{ color: '#6b7280' }}>Provider-Neutral Infrastructure OS</p>
-
-    <h3>🎯 Targets</h3>
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))', gap: 12 }}>
-      {targets.map(t => <div key={t.target_type} style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 12 }}>
-        <strong>{t.name}</strong> <StatusBadge status={t.status} />
-        <div style={{ fontSize: 13, color: '#6b7280' }}>{t.provider} · {t.platform} · {t.mode}</div>
-      </div>)}
-    </div>
-
-    <h3>✅ Verified Capabilities</h3>
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: 8 }}>
-      {caps.map(c => <div key={c.capability_id} style={{ border: '1px solid #e5e7eb', borderRadius: 6, padding: 8, fontSize: 13 }}>
-        <strong>{c.name}</strong> <StatusBadge status={c.lifecycle} />
-        <div style={{ color: '#6b7280' }}>{c.provider} · {c.fidelity}</div>
-      </div>)}
-    </div>
-
-    <h3>📋 Recent Runs</h3>
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-      {runs.map(r => <div key={r.run_id} style={{ border: '1px solid #e5e7eb', borderRadius: 6, padding: '8px 12px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <span style={{ fontFamily: 'monospace', fontSize: 13 }}>{r.run_id.slice(0, 12)}…</span>
-        <span style={{ fontSize: 12, color: '#6b7280' }}>{r.provider} · {r.platform}</span>
-        <StatusBadge status={r.state} />
-      </div>)}
-    </div>
-
-    {runners.length > 0 && <>
-    <h3>🖥️ Execution Runners</h3>
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 12 }}>
-      {runners.map(r => <div key={r.runnerId} style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 12 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <strong>{r.name || r.runnerId}</strong>
-          <StatusBadge status={r.status} />
-        </div>
-        <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>{r.os} · {r.version}</div>
-        {r.capabilities && <div style={{ marginTop: 6, display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-          {Object.entries(r.capabilities).map(([k, v]: [string, any]) =>
-            <span key={k} style={{ fontSize: 11, padding: '2px 6px', background: v.status === 'READY' ? '#dcfce7' : '#f3f4f6', borderRadius: 4 }}>
-              {k}: {v.status === 'READY' ? '✅' : '○'}
-            </span>
-          )}
-        </div>}
-      </div>)}
-    </div></>}
-  </div>;
-}
-
-function PlanReview() {
-  const [runId, setRunId] = useState('');
-  const [arch, setArch] = useState<{proposed?: ArchGraph; planned?: ArchGraph; observed?: ArchGraph; diff?: ArchDiff} | null>(null);
-  const [error, setError] = useState('');
-
-  const loadArch = async () => {
-    if (!runId) return;
-    try {
-      const d = await fetchJson(`/api/v1/runs/${runId}/architecture`);
-      setArch(d.architecture);
-      setError('');
-    } catch { setError('Run not found'); }
-  };
-
-  return <div style={{ padding: 24, fontFamily: 'system-ui' }}>
-    <h2>📐 Plan Review — Before / After</h2>
-    <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-      <input value={runId} onChange={e => setRunId(e.target.value)} placeholder="Run ID" style={{ padding: 8, border: '1px solid #d1d5db', borderRadius: 6, flex: 1 }} />
-      <button onClick={loadArch} style={{ padding: '8px 16px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer' }}>Load</button>
-    </div>
-    {error && <div style={{ color: '#ef4444' }}>{error}</div>}
-
-    {arch && <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-      <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 16 }}>
-        <h3 style={{ margin: '0 0 8px' }}>📋 BEFORE — Planned</h3>
-        {(arch.planned?.nodes || []).map(n => <div key={n.id} style={{ padding: '6px 0', borderBottom: '1px solid #f3f4f6' }}>
-          <StatusBadge status={n.status} /> <span>{n.label}</span>
-          {n.provider && <span style={{ color: '#6b7280', fontSize: 12, marginLeft: 8 }}>{n.provider} · {n.type}</span>}
-        </div>)}
-      </div>
-      <div style={{ border: '1px solid #e5e7eb', borderRadius: 8, padding: 16 }}>
-        <h3 style={{ margin: '0 0 8px' }}>👁️ AFTER — Observed</h3>
-        {(arch.observed?.nodes || []).map(n => <div key={n.id} style={{ padding: '6px 0', borderBottom: '1px solid #f3f4f6' }}>
-          <StatusBadge status={n.status} /> <span>{n.label}</span>
-        </div>)}
-      </div>
-    </div>}
-
-    {arch?.diff && <div style={{ marginTop: 16, border: '1px solid #e5e7eb', borderRadius: 8, padding: 16 }}>
-      <h3 style={{ margin: '0 0 8px' }}>📊 Change Summary</h3>
-      <div style={{ display: 'flex', gap: 16 }}>
-        <span>✅ {arch.diff.match_count} Match</span>
-        <span style={{ color: '#ef4444' }}>⚠️ {arch.diff.missing_count} Missing</span>
-        <span style={{ color: '#f59e0b' }}>❓ {arch.diff.unexpected_count} Unexpected</span>
-      </div>
-      {(arch.diff.entries || []).map((e, i) => <div key={i} style={{ padding: '4px 0', fontSize: 13 }}>
-        <StatusBadge status={e.action} /> {e.detail}
-      </div>)}
-    </div>}
-  </div>;
-}
-
-function RunDetail() {
-  const [runId, setRunId] = useState('');
-  const [run, setRun] = useState<any>(null);
-
-  const load = async () => {
-    if (!runId) return;
-    try { setRun(await fetchJson(`/api/v1/runs/${runId}`)); } catch { setRun(null); }
-  };
-
-  return <div style={{ padding: 24, fontFamily: 'system-ui' }}>
-    <h2>🔍 Run Detail</h2>
-    <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-      <input value={runId} onChange={e => setRunId(e.target.value)} placeholder="Run ID" style={{ padding: 8, border: '1px solid #d1d5db', borderRadius: 6, flex: 1 }} />
-      <button onClick={load} style={{ padding: '8px 16px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer' }}>Load</button>
-    </div>
-    {run && <div>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-        {['run_id','correlation_id','state','provider','platform','execution_mode','iac_engine','iac_version'].map(k =>
-          <div key={k}><strong>{k}:</strong> {run.run?.[k] || '—'}</div>
-        )}
-      </div>
-      <h4>Transitions ({run.transitions?.length || 0})</h4>
-      {run.transitions?.map((t: any, i: number) => <div key={i} style={{ fontSize: 13, padding: '2px 0' }}>
-        {t.from_state} → {t.to_state} <span style={{ color: '#6b7280' }}>{t.reason}</span>
-      </div>)}
-    </div>}
-  </div>;
+function LoadingSpinner() {
+  return <div className="loading-spinner"><Activity size={20} className="text-muted" /></div>;
 }
 
 export default function App() {
-  const [view, setView] = useState<View>('dashboard');
+  const [view, setView] = useState<View>('flight-deck');
+  const [breadcrumb, setBreadcrumb] = useState('Flight Deck');
 
-  const tabs: { key: View; label: string }[] = [
-    { key: 'dashboard', label: '🏠 Dashboard' },
-    { key: 'plan', label: '📐 Plan Review' },
-    { key: 'run', label: '🔍 Run Detail' },
-    { key: 'providers', label: '🧠 Provider Intel' },
-    { key: 'pulse', label: '💠 Infra Pulse' },
-    { key: 'impl', label: '📋 Implementation Plan' },
-    { key: 'sandbox', label: '🛡️ Sandbox' },
-  ];
+  useEffect(() => {
+    const item = NAV_ITEMS.find(n => n.id === view);
+    setBreadcrumb(item?.label ?? 'Flight Deck');
+  }, [view]);
 
-  return <div>
-    <nav style={{ display: 'flex', gap: 0, background: '#1f2937', padding: '0 24px' }}>
-      {tabs.map(t => <button key={t.key} onClick={() => setView(t.key)}
-        style={{ padding: '12px 16px', border: 'none', background: view === t.key ? '#374151' : 'transparent', color: '#fff', cursor: 'pointer', fontSize: 14 }}>
-        {t.label}
-      </button>)}
-    </nav>
-    {view === 'dashboard' && <Dashboard />}
-    {view === 'plan' && <PlanReview />}
-    {view === 'run' && <RunDetail />}
-    {view === 'providers' && <ProviderIntel />}
-    {view === 'pulse' && <InfraPulsePage />}
-    {view === 'impl' && <ImplementationPlanPage />}
-    {view === 'sandbox' && <SandboxExecutionPage />}
-  </div>;
+  const renderWorkspace = () => {
+    return (
+      <Suspense fallback={<LoadingSpinner />}>
+        {view === 'flight-deck' && <FlightDeck onNavigate={setView} />}
+        {view === 'architecture' && <ArchitectureWorkspace />}
+        {view === 'implementation' && <ImplementationWorkspace />}
+        {view === 'execution' && <ExecutionCenter />}
+        {view === 'evidence' && <EvidenceViewer />}
+        {view === 'promotion' && <PromotionCenter />}
+        {view === 'recovery' && <RecoveryCenter />}
+        {view === 'uat' && <UatWorkspace />}
+        {view === 'production-readiness' && <ProductionReadiness />}
+        {view === 'provider-intel' && <ProviderIntelligence />}
+        {view === 'system' && <SystemSafety />}
+      </Suspense>
+    );
+  };
+
+  return (
+    <div className="app-shell">
+      <nav className="nav-rail">
+        <div className="nav-rail-logo">
+          <Activity size={18} />
+        </div>
+        {NAV_ITEMS.map(item => {
+          const Icon = item.icon;
+          const active = view === item.id;
+          return (
+            <button
+              key={item.id}
+              className={`nav-rail-item${active ? ' active' : ''}`}
+              onClick={() => setView(item.id)}
+              title={item.label}
+            >
+              <Icon size={18} />
+            </button>
+          );
+        })}
+      </nav>
+
+      <div className="app-main">
+        <header className="topbar">
+          <span className="topbar-title">INFRA-AGAIN</span>
+          <span className="text-muted" style={{ fontSize: 10 }}>|</span>
+          <span className="topbar-breadcrumb">{breadcrumb}</span>
+          <div className="topbar-spacer" />
+          <div className="flex-row gap-sm">
+            <span className="badge badge-info" style={{ fontSize: 10 }}>SANDBOX: ASK</span>
+            <span className="badge badge-blocked" style={{ fontSize: 10 }}>CR: BLOCK</span>
+            <span className="badge badge-blocked" style={{ fontSize: 10 }}>PROD: BLOCK</span>
+          </div>
+        </header>
+        <main className="workspace">
+          {renderWorkspace()}
+        </main>
+      </div>
+    </div>
+  );
 }
