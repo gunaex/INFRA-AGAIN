@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import uuid
 import time
 from datetime import datetime, timezone
@@ -143,7 +144,10 @@ def register_execution_routes(app: FastAPI) -> None:
                 created_at=d.get("createdAt", ""), updated_at=d.get("updatedAt", ""),
             )
 
-        checks = PreflightEngine.run(pkg)
+        # Look up current plan for checksum comparison
+        current_plan = _lookup_plan(pkg.plan_id)
+
+        checks = PreflightEngine.run(pkg, current_plan_checksum=getattr(current_plan, 'plan_checksum', '') if current_plan else "")
         pkg.preflight_checks = checks
         pkg.status = ExecutionPackageStatus.PREFLIGHT_PASSED if not PreflightEngine.has_fail_or_block(checks) else ExecutionPackageStatus.PREFLIGHT_FAILED
         pkg.updated_at = _now()
@@ -167,6 +171,30 @@ def register_execution_routes(app: FastAPI) -> None:
 
         if pkg.status not in (ExecutionPackageStatus.PREFLIGHT_PASSED, ExecutionPackageStatus.READY):
             raise HTTPException(status_code=400, detail=f"Package not ready: {pkg.status.value}")
+
+        # =====================================================================
+        # Gate 0: PLAN CHECKSUM ENFORCEMENT — compare package-bound checksum
+        # against the current authoritative approved plan checksum BEFORE any
+        # executor invocation.  This is the production execution path guard.
+        # =====================================================================
+        current_plan = _lookup_plan(pkg.plan_id)
+        if current_plan and pkg.plan_checksum:
+            current_checksum = getattr(current_plan, 'plan_checksum', '')
+            if current_checksum and pkg.plan_checksum != current_checksum:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "error": "EXECUTION_PLAN_CHECKSUM_MISMATCH",
+                        "packageChecksum": pkg.plan_checksum,
+                        "currentPlanChecksum": current_checksum,
+                        "message": (
+                            "The execution package was created against a stale "
+                            "implementation plan.  The plan has been materially "
+                            "changed since the package was created.  Re-create "
+                            "the execution package from the current approved plan."
+                        ),
+                    },
+                )
 
         # Policy check
         if not pkg.policy_decision:
@@ -355,3 +383,26 @@ def register_execution_routes(app: FastAPI) -> None:
             "note": "Run-owned ephemeral resources: AUTO cleanup allowed",
             "action": "destroy_run_owned_resources",
         }
+
+    # =========================================================================
+    # Test-only endpoint: force-update a plan's checksum for stale-package
+    # testing.  This endpoint is ONLY available when INFRA_AGAIN_ACCEPTANCE
+    # is set, preventing accidental use in non-test environments.
+    # =========================================================================
+    @app.post("/api/v1/_test/implementation-plans/{plan_id}/force-checksum")
+    async def _test_force_plan_checksum(plan_id: str, new_checksum: str = ""):
+        """TEST ONLY: Force-update an in-memory plan's checksum."""
+        if not os.environ.get("INFRA_AGAIN_ACCEPTANCE"):
+            raise HTTPException(status_code=404, detail="Not found")
+        from ..implementation.api import _plans as impl_plans
+        plan = impl_plans.get(plan_id)
+        if not plan:
+            plan = _lookup_plan(plan_id)
+        if not plan:
+            raise HTTPException(status_code=404, detail="Plan not found")
+        plan.plan_checksum = new_checksum
+        impl_plans[plan_id] = plan
+        # Also update persistence so it survives lookups
+        from ..implementation.persistence import persist_plan
+        persist_plan(plan)
+        return {"planId": plan_id, "forcedChecksum": new_checksum}

@@ -47,13 +47,13 @@ def main(log_dir):
     assert "PRODUCTION_BLOCKED" in prod_decision.reason_code
     print(f"  Production: {prod_decision.verdict.value} - {prod_decision.reason_code}")
     
-    # Policy: Real AWS endpoint → BLOCK
+    # Policy: Real AWS endpoint with SANDBOX → ASK (Phase 8)
     real_target = ExecutionTarget(target_id="real", target_type="AWS",
                                   fidelity=ExecutionFidelity.SANDBOX,
                                   endpoint_reference="https://s3.amazonaws.com")
     real_decision = ExecutionPolicyEngine.evaluate(task, real_target)
-    assert real_decision.verdict == PolicyVerdict.BLOCK
-    print(f"  Real AWS: {real_decision.verdict.value} - {real_decision.reason_code}")
+    assert real_decision.verdict == PolicyVerdict.ASK, f"SANDBOX should ASK, got {real_decision.verdict.value}"
+    print(f"  Real AWS (SANDBOX): {real_decision.verdict.value} - {real_decision.reason_code}")
     
     print("PASS: Preflight + Policy verified")
     return 0

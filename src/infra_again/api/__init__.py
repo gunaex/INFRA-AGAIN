@@ -437,3 +437,10 @@ register_impl_routes(app)
 
 from ..execution.api import register_execution_routes
 register_execution_routes(app)
+
+# ===========================================================================
+# Sandbox API (Phase 8)
+# ===========================================================================
+
+from ..execution.sandbox_api import register_sandbox_routes
+register_sandbox_routes(app)

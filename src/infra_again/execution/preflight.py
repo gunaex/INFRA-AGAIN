@@ -32,19 +32,23 @@ class PreflightEngine:
     """Run preflight checks against an execution package."""
 
     @staticmethod
-    def run(package: ExecutionPackage) -> list[ExecutionPreflight]:
+    def run(package: ExecutionPackage, current_plan_checksum: str = "") -> list[ExecutionPreflight]:
         results: list[ExecutionPreflight] = []
         for spec in CHECK_SPECS:
-            check = PreflightEngine._evaluate(spec, package)
+            check = PreflightEngine._evaluate(spec, package, current_plan_checksum)
             results.append(check)
         return results
 
     @staticmethod
-    def _evaluate(spec: dict[str, Any], package: ExecutionPackage) -> ExecutionPreflight:
+    def _evaluate(spec: dict[str, Any], package: ExecutionPackage, current_plan_checksum: str = "") -> ExecutionPreflight:
         check_id = spec["check_id"]
         handler = getattr(PreflightEngine, f"_check_{check_id.lower()}", PreflightEngine._check_default)
         try:
-            status, msg = handler(package)
+            # PLAN_CHECKSUM_MATCH receives current_plan_checksum for comparison
+            if check_id == "PLAN_CHECKSUM_MATCH":
+                status, msg = handler(package, current_plan_checksum)
+            else:
+                status, msg = handler(package)
         except Exception as e:
             status, msg = PreflightStatus.FAIL, str(e)
         return ExecutionPreflight(
@@ -65,10 +69,18 @@ class PreflightEngine:
         return PreflightStatus.PASS, "Plan approval verified via checksum binding"
 
     @staticmethod
-    def _check_plan_checksum_match(package: ExecutionPackage) -> tuple[PreflightStatus, str]:
+    def _check_plan_checksum_match(package: ExecutionPackage, current_plan_checksum: str = "") -> tuple[PreflightStatus, str]:
         if not package.plan_checksum:
             return PreflightStatus.BLOCK, "No plan checksum bound to execution package"
-        return PreflightStatus.PASS, f"Plan checksum: {package.plan_checksum[:12]}"
+        if current_plan_checksum:
+            if package.plan_checksum != current_plan_checksum:
+                return PreflightStatus.BLOCK, (
+                    f"EXECUTION_PLAN_CHECKSUM_MISMATCH: "
+                    f"package={package.plan_checksum[:12]} "
+                    f"!= current={current_plan_checksum[:12]}"
+                )
+            return PreflightStatus.PASS, f"Plan checksum match: {package.plan_checksum[:12]}"
+        return PreflightStatus.PASS, f"Plan checksum present: {package.plan_checksum[:12]} (current plan not available for comparison)"
 
     @staticmethod
     def _check_design_baseline_valid(package: ExecutionPackage) -> tuple[PreflightStatus, str]:
@@ -99,10 +111,12 @@ class PreflightEngine:
     def _check_fidelity_allowed(package: ExecutionPackage) -> tuple[PreflightStatus, str]:
         fid = package.fidelity.value
         if fid in ("PLAN_ONLY", "SIMULATED", "LOCAL_RUNTIME"):
-            return PreflightStatus.PASS, f"Fidelity {fid} allowed in Phase 7"
+            return PreflightStatus.PASS, f"Fidelity {fid} allowed"
+        if fid == "SANDBOX":
+            return PreflightStatus.FAIL, "SANDBOX requires explicit sandbox preflight + user approval"
         if fid == "LOCAL_PRIVATE_CLOUD":
             return PreflightStatus.FAIL, "LOCAL_PRIVATE_CLOUD requires explicit approval"
-        return PreflightStatus.BLOCK, f"Fidelity {fid} not allowed in Phase 7"
+        return PreflightStatus.BLOCK, f"Fidelity {fid} not allowed"
 
     @staticmethod
     def _check_ownership_safe(package: ExecutionPackage) -> tuple[PreflightStatus, str]:
@@ -136,7 +150,9 @@ class PreflightEngine:
 
     @staticmethod
     def _check_credential_not_required(package: ExecutionPackage) -> tuple[PreflightStatus, str]:
-        # Ensure no AWS/GCP creds are set
+        # For SANDBOX, credentials are required but must be temporary/least-privilege
+        if package.fidelity == ExecutionFidelity.SANDBOX:
+            return PreflightStatus.PASS, "SANDBOX: credentials required (validated by sandbox preflight)"
         import os
         aws_key = os.environ.get("AWS_ACCESS_KEY_ID", "")
         gcp_cred = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS", "")

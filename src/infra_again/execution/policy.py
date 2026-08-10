@@ -12,7 +12,10 @@ from .phase7_models import (
 # Phase 7 allowed fidelities
 PHASE7_ALLOWED = {ExecutionFidelity.PLAN_ONLY, ExecutionFidelity.SIMULATED, ExecutionFidelity.LOCAL_RUNTIME}
 PHASE7_ASK = {ExecutionFidelity.LOCAL_PRIVATE_CLOUD}
-PHASE7_BLOCK = {ExecutionFidelity.SANDBOX, ExecutionFidelity.CONTROLLED_REAL, ExecutionFidelity.PRODUCTION}
+PHASE7_BLOCK = {ExecutionFidelity.CONTROLLED_REAL, ExecutionFidelity.PRODUCTION}
+
+# Phase 8 moves SANDBOX from BLOCK to ASK (never AUTO)
+PHASE8_ASK = {ExecutionFidelity.SANDBOX}
 
 # Action-specific rules
 ACTION_FIDELITY_RULES: dict[str, set[ExecutionFidelity]] = {
@@ -38,35 +41,48 @@ class ExecutionPolicyEngine:
 
     @staticmethod
     def evaluate(task: ExecutionTask, target: ExecutionTarget) -> ExecutionPolicyDecision:
-        # 1. Production → BLOCK
+        # 1. Production → BLOCK (Phase 7 & 8)
         if target.fidelity == ExecutionFidelity.PRODUCTION:
             return ExecutionPolicyDecision(
                 verdict=PolicyVerdict.BLOCK,
                 reason_code="PRODUCTION_BLOCKED",
-                reason="Production execution not allowed in Phase 7",
+                reason="Production execution not allowed",
                 effective_fidelity=ExecutionFidelity.PLAN_ONLY,
             )
 
-        # 2. Real cloud endpoint → BLOCK
-        if ExecutionPolicyEngine._is_real_endpoint(target):
+        # 2. CONTROLLED_REAL → BLOCK (Phase 7 & 8)
+        if target.fidelity == ExecutionFidelity.CONTROLLED_REAL:
             return ExecutionPolicyDecision(
                 verdict=PolicyVerdict.BLOCK,
-                reason_code="REAL_CLOUD_EXECUTION_NOT_ALLOWED_IN_PHASE_7",
-                reason=f"Real cloud endpoint detected: {target.endpoint_reference}",
+                reason_code="CONTROLLED_REAL_BLOCKED",
+                reason="CONTROLLED_REAL execution not allowed",
                 effective_fidelity=ExecutionFidelity.PLAN_ONLY,
             )
 
-        # 3. Check fidelity against Phase 7 rules
+        # 3. Real cloud endpoint → BLOCK (unless SANDBOX)
+        if ExecutionPolicyEngine._is_real_endpoint(target):
+            if target.fidelity == ExecutionFidelity.SANDBOX:
+                # SANDBOX may access real endpoints — proceed to fidelity check
+                pass
+            else:
+                return ExecutionPolicyDecision(
+                    verdict=PolicyVerdict.BLOCK,
+                    reason_code="REAL_CLOUD_EXECUTION_NOT_ALLOWED",
+                    reason=f"Real cloud endpoint detected: {target.endpoint_reference}",
+                    effective_fidelity=ExecutionFidelity.PLAN_ONLY,
+                )
+
+        # 4. Check fidelity against Phase 7/8 rules
         fid = target.fidelity
         if fid in PHASE7_BLOCK:
             return ExecutionPolicyDecision(
                 verdict=PolicyVerdict.BLOCK,
-                reason_code="FIDELITY_BLOCKED_IN_PHASE_7",
-                reason=f"Fidelity {fid.value} not allowed in Phase 7",
+                reason_code="FIDELITY_BLOCKED",
+                reason=f"Fidelity {fid.value} not allowed",
                 effective_fidelity=ExecutionFidelity.PLAN_ONLY,
             )
 
-        if fid in PHASE7_ASK:
+        if fid in PHASE7_ASK or fid in PHASE8_ASK:
             return ExecutionPolicyDecision(
                 verdict=PolicyVerdict.ASK,
                 reason_code="FIDELITY_REQUIRES_APPROVAL",
@@ -88,12 +104,17 @@ class ExecutionPolicyEngine:
 
         # 5. Credential safety
         if ExecutionPolicyEngine._has_real_credentials():
-            return ExecutionPolicyDecision(
-                verdict=PolicyVerdict.BLOCK,
-                reason_code="REAL_CREDENTIALS_DETECTED",
-                reason="Real cloud credentials detected in environment",
-                effective_fidelity=ExecutionFidelity.PLAN_ONLY,
-            )
+            if target.fidelity == ExecutionFidelity.SANDBOX:
+                # SANDBOX may have credentials — they must be temporary/least-privilege
+                # (enforced by sandbox preflight, not policy)
+                pass
+            else:
+                return ExecutionPolicyDecision(
+                    verdict=PolicyVerdict.BLOCK,
+                    reason_code="REAL_CREDENTIALS_DETECTED",
+                    reason="Real cloud credentials detected in environment",
+                    effective_fidelity=ExecutionFidelity.PLAN_ONLY,
+                )
 
         # 6. All checks passed → ALLOW
         return ExecutionPolicyDecision(
