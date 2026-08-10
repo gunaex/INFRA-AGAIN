@@ -169,6 +169,36 @@ def register_execution_routes(app: FastAPI) -> None:
             d = _persistence.load_package(package_id)
             if not d:
                 raise HTTPException(status_code=404, detail="Package not found")
+            # Reconstruct ExecutionPackage from persisted dict
+            target_dict = d.get("target", {})
+            pkg = ExecutionPackage(
+                execution_package_id=d.get("executionPackageId", ""),
+                plan_id=d.get("planId", ""),
+                plan_revision=d.get("planRevision", 1),
+                plan_checksum=d.get("planChecksum", ""),
+                design_id=d.get("designId", ""),
+                design_revision=d.get("designRevision", 1),
+                correlation_id=d.get("correlationId", ""),
+                target=ExecutionTarget(
+                    target_id=target_dict.get("targetId", ""),
+                    target_type=target_dict.get("targetType", "PLAN_ONLY"),
+                    provider=target_dict.get("provider", ""),
+                    platform=target_dict.get("platform", ""),
+                    fidelity=ExecutionFidelity(target_dict.get("fidelity", "PLAN_ONLY")),
+                    endpoint_reference=target_dict.get("endpointReference", ""),
+                    environment_name=target_dict.get("environmentName", ""),
+                    isolated=target_dict.get("isolated", True),
+                    ephemeral=target_dict.get("ephemeral", True),
+                    managed_by=target_dict.get("managedBy", "INFRA_AGAIN"),
+                    created_by_run_id=target_dict.get("createdByRunId", ""),
+                    capabilities=target_dict.get("capabilities", []),
+                ),
+                fidelity=ExecutionFidelity(target_dict.get("fidelity", "PLAN_ONLY")),
+                created_at=d.get("createdAt", ""),
+                updated_at=d.get("updatedAt", ""),
+            )
+            pkg.status = ExecutionPackageStatus(d.get("status", "DRAFT"))
+            _packages[pkg.execution_package_id] = pkg
 
         if pkg.status not in (ExecutionPackageStatus.PREFLIGHT_PASSED, ExecutionPackageStatus.READY):
             raise HTTPException(status_code=400, detail=f"Package not ready: {pkg.status.value}")
