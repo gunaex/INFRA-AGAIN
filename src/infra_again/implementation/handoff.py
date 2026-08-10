@@ -45,7 +45,7 @@ def generate_qa_handoff(plan: ImplementationPlan) -> dict:
                 "evidenceRequirements": [e.to_dict() for e in t.evidence_requirements],
                 "riskLevel": t.risk_level.value,
                 "executionMode": t.execution_mode,
-                "scenarioReferences": [d for d in t.derived_from if "scenario" in d.lower() or "flow" in d.lower()],
+                "scenarioReferences": [d.get("id", "") for d in t.derived_from if "scenario" in d.get("type", "").lower() or "flow" in d.get("type", "").lower()],
             }
             for w in plan.work_packages
             for t in w.tasks

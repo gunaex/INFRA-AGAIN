@@ -20,7 +20,7 @@ def register_impl_routes(app: FastAPI) -> None:
 
     @app.post("/api/v1/designs/{design_id}/implementation-plan")
     async def create_implementation_plan(design_id: str):
-        from ..flow.api import _designs
+        from ..flow.api import _designs, _flows
         design = _designs.get(design_id)
         if not design:
             raise HTTPException(status_code=404, detail="Design not found")
@@ -28,7 +28,11 @@ def register_impl_routes(app: FastAPI) -> None:
             raise HTTPException(status_code=400,
                 detail="IMPLEMENTATION_PLAN_NOT_ALLOWED: Design must be BASELINE_FROZEN")
 
-        plan = generate_implementation_plan(design.to_dict())
+        flow = next((f for f in _flows.values() if f.architecture_graph_id == design_id), None)
+        plan = generate_implementation_plan(
+            design.to_dict(),
+            flow=flow.to_dict() if flow else None,
+        )
         _plans[plan.plan_id] = plan
         persist_plan(plan)
         return {"plan": plan.to_dict()}

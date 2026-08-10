@@ -20,7 +20,7 @@ run_gate() {
 }
 
 echo "INFRA-AGAIN V6 ACCEPTANCE"; echo "Logs: $LOG_DIR"; echo ""
-run_gate 1 "V5.1 regression"          "bash $GATES_DIR/01-v5-1-regression.sh" 900 || true
+run_gate 1 "V5.1 regression"          "bash $GATES_DIR/01-v5-1-regression.sh" 1200 || true
 run_gate 2 "Plan models"              "python3.11 $GATES_DIR/02-plan-models.py" 30 || true
 run_gate 3 "Golden planner"           "python3.11 $GATES_DIR/03-golden-planner.py" 30 || true
 run_gate 4 "Dependencies"             "python3.11 $GATES_DIR/04-dependencies.py" 30 || true

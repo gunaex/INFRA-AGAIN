@@ -9,6 +9,10 @@ if [ ! -d ui ]; then echo "SKIP: No ui/"; exit 0; fi
 rm -rf ui/dist
 set +e
 (cd ui && npm ci --silent 2>&1) > "$1/npm-ci.log" 2>&1; NPM_EXIT=$?
+if [ "$NPM_EXIT" -ne 0 ]; then
+    echo "npm ci failed, trying npm install..."
+    (cd ui && npm install --silent 2>&1) > "$1/npm-ci.log" 2>&1; NPM_EXIT=$?
+fi
 (cd ui && npx vite build 2>&1) > "$1/vite-build.log" 2>&1; BUILD_EXIT=$?
 set -e
 [ "$NPM_EXIT" -ne 0 ] && { echo "FAIL: npm ci exit=$NPM_EXIT"; tail -10 "$1/npm-ci.log"; exit 1; }

@@ -1,4 +1,7 @@
-"""INFRA-AGAIN Implementation Planning — Phase 6."""
+"""INFRA-AGAIN Implementation Planning — Phase 6.0.1.
+
+Design-derived: every task traced to actual design truth.
+"""
 from .models import (
     ImplementationPlan, ImplementationWorkPackage, ImplementationTask,
     ImplementationDependency, ImplementationMilestone, ImplementationGate,

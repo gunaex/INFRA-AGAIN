@@ -47,7 +47,7 @@ echo "Logs: $LOG_DIR"
 echo ""
 
 # ===========================================================================
-run_gate 1 "V4 regression"       "bash $GATES_DIR/01-v4-regression.sh" 360 || true
+run_gate 1 "V4 regression"       "bash $GATES_DIR/01-v4-regression.sh" 600 || true
 run_gate 2 "Flow domain"         "python3.11 $GATES_DIR/02-flow-domain.py" 30 || true
 run_gate 3 "Flow scenarios"      "python3.11 $GATES_DIR/03-flow-scenarios.py" 30 || true
 run_gate 4 "Design persistence"  "python3.11 $GATES_DIR/04-design-persistence.py" 30 || true

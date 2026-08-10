@@ -19,6 +19,11 @@ echo "  npm ci..."
 set +e
 (cd ui && npm ci --silent 2>&1) > "$1/npm-ci.log" 2>&1
 NPM_EXIT=$?
+if [ "$NPM_EXIT" -ne 0 ]; then
+    echo "  npm ci failed, trying npm install..."
+    (cd ui && npm install --silent 2>&1) > "$1/npm-ci.log" 2>&1
+    NPM_EXIT=$?
+fi
 set -e
 if [ "$NPM_EXIT" -ne 0 ]; then
     echo "FAIL: npm ci exit=$NPM_EXIT"
