@@ -1,70 +1,30 @@
 
 import { useState, useEffect } from 'react';
 import { api } from '../../lib/api';
-
-export default function ArchitectureWorkspace() {
-  const [designs, setDesigns] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  useEffect(() => {
-    api.designs().then((d: any) => { setDesigns(d.designs || []); setLoading(false); }).catch(() => setLoading(false));
-  }, []);
-  if (loading) return <p className="text-gray-500 text-sm">Loading…</p>;
-
-  return (
-    <div className="space-y-6">
-      <div>
-        <p className="text-xs text-gray-400 uppercase tracking-wide">Architecture Workspace</p>
-        <h2 className="text-xl font-semibold text-gray-900">Infrastructure Design</h2>
-        <p className="text-sm text-gray-500 mt-1">Provider-neutral architecture modeling. Provider ≠ Platform.</p>
-      </div>
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <div className="bg-white border border-gray-200 rounded-lg p-5">
-          <h3 className="text-sm font-semibold text-gray-700 mb-3">Providers</h3>
-          <div className="space-y-2">
-            {['AWS', 'GCP', 'ON_PREM', 'PRIVATE_CLOUD'].map(p => (
-              <div key={p} className="flex justify-between text-sm">
-                <span className="text-gray-700">{p}</span>
-                <span className="px-2 py-0.5 rounded-full text-xs bg-gray-100 text-gray-500">NOT EXECUTED</span>
-              </div>
-            ))}
-          </div>
-        </div>
-        <div className="bg-white border border-gray-200 rounded-lg p-5">
-          <h3 className="text-sm font-semibold text-gray-700 mb-3">Platforms</h3>
-          <div className="space-y-2">
-            {['NATIVE_VM', 'KUBERNETES', 'OPENSHIFT_OCP', 'BARE_METAL'].map(p => (
-              <div key={p} className="flex justify-between text-sm">
-                <span className="text-gray-700">{p}</span>
-                <span className="text-xs text-gray-400">{p === 'OPENSHIFT_OCP' ? 'Platform (not provider)' : ''}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      <div className="bg-white border border-gray-200 rounded-lg p-5">
-        <h3 className="text-sm font-semibold text-gray-700 mb-3">Designs</h3>
-        {designs.length === 0 ? (
-          <p className="text-sm text-gray-400 py-8 text-center">No designs yet. Create an architecture design to define infrastructure topology.</p>
-        ) : (
-          <table className="w-full text-sm">
-            <thead><tr className="border-b border-gray-100 text-left text-xs text-gray-400 uppercase tracking-wider">
-              <th className="pb-2 pr-4">ID</th><th className="pb-2 pr-4">Status</th><th className="pb-2 pr-4">Provider</th><th className="pb-2">Created</th>
-            </tr></thead>
-            <tbody>
-              {designs.map((d: any) => (
-                <tr key={d.id || d.designId} className="border-b border-gray-50">
-                  <td className="py-2 pr-4 font-mono text-xs text-gray-500">{d.id || d.designId}</td>
-                  <td className="py-2 pr-4"><span className="px-2 py-0.5 rounded-full text-xs bg-blue-100 text-blue-700">{d.status || 'DRAFT'}</span></td>
-                  <td className="py-2 pr-4 text-gray-600">{d.provider || '-'}</td>
-                  <td className="py-2 text-xs text-gray-400">{d.createdAt || '-'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+interface Props { actor:{name:string;role:string}; wsId:string; onWsChange:(id:string,name:string)=>void; }
+export default function ArchitectureWorkspace({ actor, wsId, onWsChange }: Props) {
+  const [designs,setDesigns]=useState<any[]>([]);
+  const [show,setShow]=useState(false);
+  const [form,setForm]=useState({name:'',description:'',provider:'ON_PREM',platform:'NATIVE_VM',fidelity:'LOCAL_RUNTIME',region:''});
+  const [msg,setMsg]=useState('');
+  const load=()=>api.designs().then((d:any)=>setDesigns(d.designs||[])).catch(()=>{});
+  useEffect(()=>{load();},[]);
+  const create=async()=>{try{const r=await api.createDesign({name:form.name,description:form.description,provider:form.provider,platform:form.platform,fidelity:form.fidelity,region:form.region});setMsg('Design created: '+(r.id||r.designId));setShow(false);load();if(wsId&&(r.id||r.designId))api.setWsDesign(wsId,r.id||r.designId).catch(()=>{});}catch(e:any){setMsg('Error: '+e.message);}};
+  return (<div className="page">
+    <div className="mb-lg"><div className="page-eyebrow">Architecture Workspace</div><div className="flex-between"><h2 className="page-title">Infrastructure Design</h2><button className="btn btn-primary" onClick={()=>setShow(!show)}>+ Create Design</button></div><p className="page-subtitle">Provider-neutral architecture. Provider \u2260 Platform.</p></div>
+    {msg&&<div className="msg-info">{msg}</div>}
+    {show&&(<div className="panel mb-md">
+      <div className="panel-title mb-sm">New Architecture Design</div>
+      <input className="form-input" placeholder="Design name" value={form.name} onChange={e=>setForm({...form,name:e.target.value})}/>
+      <input className="form-input" placeholder="Description" value={form.description} onChange={e=>setForm({...form,description:e.target.value})}/>
+      <div className="grid-2"><select className="form-select" value={form.provider} onChange={e=>setForm({...form,provider:e.target.value})}>{['AWS','GCP','ON_PREM','PRIVATE_CLOUD'].map(p=><option key={p} value={p}>{p}</option>)}</select>
+      <select className="form-select" value={form.platform} onChange={e=>setForm({...form,platform:e.target.value})}>{['NATIVE_VM','KUBERNETES','OPENSHIFT_OCP','BARE_METAL'].map(p=><option key={p} value={p}>{p}</option>)}</select></div>
+      <select className="form-select" value={form.fidelity} onChange={e=>setForm({...form,fidelity:e.target.value})}>{['PLAN_ONLY','SIMULATED','LOCAL_RUNTIME','SANDBOX','CONTROLLED_REAL'].map(f=><option key={f} value={f}>{f}</option>)}</select>
+      <div className="flex-row gap-sm"><button className="btn btn-primary" onClick={create}>Create Design</button><button className="btn btn-secondary" onClick={()=>setShow(false)}>Cancel</button></div>
+    </div>)}
+    <div className="panel">
+      <div className="panel-header"><div className="panel-title">Designs</div></div>
+      {designs.length===0?<div className="empty-state"><div className="empty-state-title">No designs yet</div></div>:<table className="data-table"><thead><tr><th>ID</th><th>Name</th><th>Provider</th><th>Status</th><th>Actions</th></tr></thead><tbody>{designs.map((d:any)=>(<tr key={d.id||d.designId}><td className="mono">{d.id||d.designId}</td><td style={{color:'var(--text-primary)'}}>{d.name||'-'}</td><td className="text-secondary">{d.provider||'-'} / {d.platform||'-'}</td><td><span className={`badge ${d.status==='ACCEPTED'||d.status==='BASELINE_FROZEN'?'badge-success':'badge-neutral'}`}>{d.status||'DRAFT'}</span></td><td className="flex-row gap-xs">{d.status!=='ACCEPTED'&&d.status!=='BASELINE_FROZEN'&&<button className="btn btn-primary btn-sm" onClick={async()=>{try{await api.acceptDesign(d.id||d.designId);load();}catch(e:any){setMsg('Error: '+e.message);}}}>Accept</button>}<button className="btn btn-ghost btn-sm" onClick={async()=>{if(wsId){await api.setWsDesign(wsId,d.id||d.designId);setMsg('Design set as current');}}}>Set Current</button></td></tr>))}</tbody></table>}
     </div>
-  );
+  </div>);
 }

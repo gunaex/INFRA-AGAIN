@@ -1,64 +1,25 @@
 
 import { useState, useEffect } from 'react';
 import { api } from '../../lib/api';
-
-export default function ProductionReadiness() {
-  const [list, setList] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  useEffect(() => {
-    api.readinessList().then((d: any) => { setList(d.readinessRecords || []); setLoading(false); }).catch(() => setLoading(false));
-  }, []);
-  if (loading) return <p className="text-gray-500 text-sm">Loading…</p>;
-  const latest = list[0];
-
-  return (
-    <div className="space-y-6">
-      <div>
-        <p className="text-xs text-gray-400 uppercase tracking-wide">Production Readiness</p>
-        <h2 className="text-xl font-semibold text-gray-900">Production Eligibility</h2>
-        <p className="text-sm text-gray-500 mt-1">Evaluates all gates. READY confirms eligibility only — PRODUCTION remains BLOCKED.</p>
-      </div>
-
-      <div className="bg-white border border-gray-200 rounded-lg p-8 text-center">
-        <p className={`text-2xl font-bold ${latest?.readinessDecision==='READY'?'text-green-600':'text-red-600'}`}>
-          {latest?.readinessDecision || 'NOT EVALUATED'}
-        </p>
-        <p className="text-sm text-gray-500 mt-2">Production Readiness Status</p>
-        <div className="mt-4">
-          <span className="px-3 py-1 rounded-full text-sm font-medium bg-red-100 text-red-700">PRODUCTION EXECUTION: BLOCKED</span>
-        </div>
-        <p className="text-xs text-gray-400 mt-3">Readiness confirms eligibility only. Future Production AIRLOCK required.</p>
-      </div>
-
-      {latest && (
-        <div className="bg-white border border-gray-200 rounded-lg p-5">
-          <h3 className="text-sm font-semibold text-gray-700 mb-3">Gate Evaluation</h3>
-          <div className="space-y-1">
-            {(latest.blocks||[]).map((b:string) => (
-              <div key={b} className="flex items-center gap-2 text-sm text-red-600 px-3 py-1.5 rounded bg-red-50">
-                <span className="text-xs">✕</span> {b}
-              </div>
-            ))}
-            {(latest.warnings||[]).map((w:string) => (
-              <div key={w} className="flex items-center gap-2 text-sm text-yellow-600 px-3 py-1.5 rounded bg-yellow-50">
-                <span className="text-xs">⚠</span> {w}
-              </div>
-            ))}
-            {(!latest.blocks||latest.blocks.length===0) && (!latest.warnings||latest.warnings.length===0) && (
-              <div className="flex items-center gap-2 text-sm text-green-600 px-3 py-1.5 rounded bg-green-50">
-                <span className="text-xs">✓</span> All gates passed
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {list.length === 0 && (
-        <div className="bg-white border border-gray-200 rounded-lg p-10 text-center">
-          <p className="text-sm text-gray-400">No readiness evaluation yet.</p>
-          <p className="text-xs text-gray-400 mt-1">Evaluate with promotion, UAT, and rollback plan.</p>
-        </div>
-      )}
+export default function ProductionReadiness({ actor, wsId }:{actor:{name:string;role:string};wsId:string}) {
+  const [list,setList]=useState<any[]>([]);
+  const [promos,setPromos]=useState<any[]>([]);
+  const [uats,setUats]=useState<any[]>([]);
+  const [rbs,setRbs]=useState<any[]>([]);
+  const [msg,setMsg]=useState('');
+  const [form,setForm]=useState({promotionId:'',uatId:'',rollbackPlanId:'',planId:'',packageId:'',planChecksum:'cs1',packageChecksum:'cs1'});
+  const load=()=>{api.readinessList().then((d:any)=>setList(d.readinessRecords||[])).catch(()=>{});api.promotions().then((d:any)=>setPromos(d.promotions||[])).catch(()=>{});api.uats().then((d:any)=>setUats(d.uats||[])).catch(()=>{});api.rollbacks().then((d:any)=>setRbs(d.rollbackPlans||[])).catch(()=>{});};
+  useEffect(()=>{load();},[]);
+  const evaluate=async()=>{try{const r=await api.evaluateReadiness(form);setMsg('Result: '+r.readiness.readinessDecision+' ('+r.readiness.blocks.length+' blockers)');load();}catch(e:any){setMsg('Error: '+e.message);}};
+  const latest=list[0];
+  return (<div className="page">
+    <div className="mb-lg"><div className="page-eyebrow">Production Readiness</div><h2 className="page-title">Production Eligibility</h2><p className="page-subtitle">Evaluates all gates. READY confirms eligibility only \u2014 PRODUCTION remains BLOCKED.</p></div>
+    {msg&&<div className="msg-info">{msg}</div>}
+    <div className="panel mb-md"><div className="panel-title mb-sm">Evaluate Readiness</div>
+      <div className="grid-2">{[{k:'promotionId',label:'Promotion',items:promos},{k:'uatId',label:'UAT',items:uats},{k:'rollbackPlanId',label:'Rollback',items:rbs}].map(f=>(<select key={f.k} className="form-select" value={(form as any)[f.k]} onChange={e=>setForm({...form,[f.k]:e.target.value})}><option value="">-- {f.label} --</option>{f.items.map((i:any)=><option key={i.promotionId||i.uatId||i.rollbackId} value={i.promotionId||i.uatId||i.rollbackId}>{(i.promotionId||i.uatId||i.rollbackId)} ({i.status})</option>)}</select>))}</div>
+      <button className="btn btn-primary" onClick={evaluate}>Evaluate Readiness</button>
     </div>
-  );
+    {latest&&<div className="panel mb-md" style={{textAlign:'center',padding:24}}><div style={{fontSize:22,fontWeight:700,color:latest.readinessDecision==='READY'?'var(--success)':'var(--danger)'}}>{latest.readinessDecision}</div><div className="text-muted mt-sm" style={{fontSize:11}}>Production Readiness Status</div><div className="mt-md"><span className="badge badge-danger">PRODUCTION EXECUTION: BLOCKED</span></div><div className="text-muted mt-sm" style={{fontSize:10}}>Readiness confirms eligibility only. Future AIRLOCK required.</div></div>}
+    {list.length===0&&!latest&&<div className="panel empty-state"><div className="empty-state-title">No readiness evaluation</div></div>}
+  </div>);
 }

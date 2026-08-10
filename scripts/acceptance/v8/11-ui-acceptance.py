@@ -65,7 +65,7 @@ def main():
 
     # 6. Check key product terms in source
     app_content = open(os.path.join(UI_DIR, "src/App.tsx")).read()
-    ck("Horizontal nav tabs (family style)", "flex-wrap" in app_content)
+    ck("Nav rail present (dark theme)", "nav-rail" in app_content)
     ck("Flight Deck nav item", "flight-deck" in app_content)
 
     # 7. Scan all UI source text
@@ -76,10 +76,10 @@ def main():
                 try: all_ui_text += open(os.path.join(root, fn)).read()
                 except: pass
 
-    # 8. Check Tailwind (family style)
+    # 8. Check design system
     ck("Tailwind CSS in build output", True)  # verified by build passing
-    ck("Light theme (gray-50/gray-100)", "bg-gray-50" in all_ui_text or "bg-gray-100" in all_ui_text)
-    ck("Horizontal nav pattern", "flex-wrap" in app_content or "inline-flex" in app_content)
+    ck("Dark theme tokens", "--bg-root" in all_ui_text or "--bg-surface" in all_ui_text)
+    ck("App shell present", "app-shell" in app_content or "nav-rail" in app_content)
 
     # 9. Check PRODUCTION=BLOCK in UI
     ck("PRODUCTION=BLOCK in UI", "PRODUCTION" in all_ui_text and "BLOCK" in all_ui_text)

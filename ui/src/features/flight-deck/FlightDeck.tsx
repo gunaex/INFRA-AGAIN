@@ -1,109 +1,113 @@
-import { useState, useEffect } from 'react';
+
+import { useState, useEffect, useContext } from 'react';
 import { api } from '../../lib/api';
+import { ActorCtx } from '../../App';
 
-function StatusBadge({ status }: { status: string }) {
-  const styles: Record<string, string> = {
-    APPROVED: 'bg-green-100 text-green-700',
-    PENDING_APPROVAL: 'bg-yellow-100 text-yellow-700',
-    CONSUMED: 'bg-blue-100 text-blue-700',
-    REJECTED: 'bg-red-100 text-red-700',
-    DRAFT: 'bg-gray-100 text-gray-600',
-    PASSED: 'bg-green-100 text-green-700',
-    FAILED: 'bg-red-100 text-red-700',
-    NOT_STARTED: 'bg-gray-100 text-gray-600',
-    ASK: 'bg-cyan-100 text-cyan-700',
-    BLOCK: 'bg-red-100 text-red-700',
-    BLOCKED: 'bg-red-100 text-red-700',
-    DEFERRED: 'bg-gray-100 text-gray-500',
-  };
-  return (
-    <span className={`px-2 py-0.5 rounded-full text-xs ${styles[status] || 'bg-gray-100 text-gray-600'}`}>
-      {status}
-    </span>
-  );
-}
+interface Props { onNavigate:(v:any)=>void; wsId:string; wsName:string; onWsChange:(id:string,name:string)=>void; }
 
-interface Props { onNavigate: (v: any) => void; }
-
-export default function FlightDeck({ onNavigate }: Props) {
-  const [envs, setEnvs] = useState<any[]>([]);
+export default function FlightDeck({ onNavigate, wsId, wsName, onWsChange }: Props) {
+  const { actor } = useContext(ActorCtx);
+  const [ws, setWs] = useState<any>(null);
+  const [designs, setDesigns] = useState<any[]>([]);
   const [promos, setPromos] = useState<any[]>([]);
-  const [runs, setRuns] = useState<any[]>([]);
+  const [plans, setPlans] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    Promise.all([
-      api.environments().catch(() => ({ environments: [] })),
-      api.promotions().catch(() => ({ promotions: [] })),
-      api.runs().catch(() => ({ runs: [] })),
-    ]).then(([e, p, r]) => {
-      setEnvs(e.environments || []);
-      setPromos(p.promotions || []);
-      setRuns(r.runs || []);
-      setLoading(false);
-    });
-  }, []);
+  const load = () => Promise.all([
+    api.workspaces().catch(()=>({workspaces:[]})),
+    api.designs().catch(()=>({designs:[]})),
+    api.promotions().catch(()=>({promotions:[]})),
+    api.runs().catch(()=>({runs:[]})),
+  ]).then(([w,d,p,r])=>{
+    const wss = w.workspaces||[];
+    if (wss.length>0 && !wsId) { const w0=wss[0]; onWsChange(w0.workspaceId, w0.name); }
+    const cw = wss.find((x:any)=>x.workspaceId===wsId) || null;
+    setWs(cw); setDesigns(d.designs||[]); setPromos(p.promotions||[]);
+    setPlans((r as any).plans||(r as any).implementation_plans||[]);
+    setLoading(false);
+  });
+  useEffect(()=>{load();},[wsId]);
+  if (loading) return <div className="loading">Loading\u2026</div>;
 
-  if (loading) return <p className="text-gray-500 text-sm">Loading\u2026</p>;
+  const currentDesign = ws?.currentDesignId ? designs.find((d:any)=>(d.id||d.designId)===ws.currentDesignId) : null;
+  const designAccepted = currentDesign?.status==='ACCEPTED'||currentDesign?.status==='BASELINE_FROZEN';
+  const hasPlan = plans.length>0;
+  const planApproved = plans.some((p:any)=>p.status==='APPROVED_FOR_EXECUTION');
+  const hasPromo = promos.length>0;
+  const promoApproved = promos.some((p:any)=>p.status==='APPROVED');
 
-  const sb = envs.find((e: any) => e.classification === 'SANDBOX');
-  const cr = envs.find((e: any) => e.classification === 'CONTROLLED_REAL');
-  const prod = envs.find((e: any) => e.classification === 'PRODUCTION');
-  const approvedPromos = promos.filter((p: any) => p.status === 'APPROVED');
-  const pendingPromos = promos.filter((p: any) => p.status === 'PENDING_APPROVAL');
+  const stages = [
+    {id:'design',label:'Design',done:!!currentDesign,active:!currentDesign},
+    {id:'accept',label:'Accept',done:designAccepted,active:!!currentDesign&&!designAccepted},
+    {id:'plan',label:'Plan',done:hasPlan,active:designAccepted&&!hasPlan},
+    {id:'approve',label:'Approve',done:planApproved,active:hasPlan&&!planApproved},
+    {id:'package',label:'Package',done:false,active:planApproved},
+    {id:'execute',label:'Execute',done:false,active:false},
+    {id:'observe',label:'Observe',done:false,active:false},
+    {id:'validate',label:'Validate',done:false,active:false},
+    {id:'verify',label:'Verify',done:false,active:false},
+    {id:'evidence',label:'Evidence',done:false,active:false},
+    {id:'promote',label:'Promote',done:hasPromo,active:false},
+    {id:'rollback',label:'Rollback',done:false,active:hasPromo&&!false},
+    {id:'uat',label:'UAT',done:false,active:false},
+    {id:'readiness',label:'Readiness',done:false,active:false},
+  ];
 
-  const hasExecution = runs.some((r: any) => r.status === 'COMPLETED');
-  const hasPromotion = approvedPromos.length > 0;
+  const navMap:Record<string,string>={design:'architecture',accept:'architecture',plan:'implementation',approve:'implementation',package:'execution',execute:'execution',promote:'promotion',rollback:'recovery',uat:'uat',readiness:'prod-readiness'};
 
-  let nextAction = 'Create an Architecture Design to begin';
-  let nextView: any = 'architecture';
-  if (hasExecution && !hasPromotion) { nextAction = 'Promotion pending approval'; nextView = 'promotion'; }
-  else if (pendingPromos.length > 0) { nextAction = `${pendingPromos.length} promotion(s) awaiting approval`; nextView = 'promotion'; }
-  else if (hasPromotion) { nextAction = 'Production readiness evaluation available'; nextView = 'production-readiness'; }
+  let nextAction='Create Architecture Design';let nextView='architecture';
+  if(currentDesign&&!designAccepted){nextAction='Accept Design';nextView='architecture';}
+  else if(designAccepted&&!hasPlan){nextAction='Generate Implementation Plan';nextView='implementation';}
+  else if(hasPlan&&!planApproved){nextAction='Approve Implementation Plan';nextView='implementation';}
+  else if(planApproved&&!hasPromo){nextAction='Create Execution Package';nextView='execution';}
+  else if(hasPromo&&!promoApproved){nextAction='Approve Promotion';nextView='promotion';}
+  else if(promoApproved){nextAction='Evaluate Production Readiness';nextView='prod-readiness';}
 
   return (
-    <div className="space-y-6">
-      <div>
-        <p className="text-xs text-gray-400 uppercase tracking-wide">Infrastructure Flight Deck</p>
-        <h2 className="text-xl font-semibold text-gray-900">INFRA-AGAIN</h2>
-        <p className="text-sm text-gray-500 mt-1 max-w-2xl">
-          Infrastructure control center — Design, Plan, Execute, Verify, Promote. Every stage independently validated. No single observer defines success.
-        </p>
+    <div className="page">
+      <div className="mb-lg">
+        <div className="page-eyebrow">Infrastructure Flight Deck</div>
+        <h2 className="page-title">INFRA-AGAIN</h2>
+        <p className="page-subtitle">Infrastructure control center — Design, Plan, Execute, Verify, Promote.</p>
       </div>
 
-      {/* Environment cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        {[sb, cr, prod].map((env: any) => {
-          if (!env) return null;
-          const isBlocked = env.classification === 'PRODUCTION' || env.classification === 'CONTROLLED_REAL';
-          return (
-            <div key={env.environmentId} className="bg-white border border-gray-200 rounded-lg p-5">
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="font-medium text-gray-900 text-sm">{env.name || env.classification}</h3>
-                <StatusBadge status={isBlocked ? 'BLOCK' : 'ASK'} />
-              </div>
-              <div className="text-xs text-gray-500 space-y-1">
-                <div>{env.provider?.toUpperCase() || 'AWS'} · {env.region || 'us-east-1'}</div>
-                <div>Blast Radius: {env.blastRadius || 'N/A'}</div>
-              </div>
+      {/* Current Work */}
+      <div className="panel mb-md">
+        <div className="flex-between" style={{flexWrap:'wrap',gap:8}}>
+          <div>
+            <div style={{fontSize:14,fontWeight:600,color:'var(--text-primary)'}}>{ws?.name||'No active workspace'}</div>
+            <div className="flex-row gap-sm" style={{marginTop:4,fontSize:11,color:'var(--text-secondary)'}}>
+              {currentDesign ? <><span>Design:</span><span className="mono">{currentDesign.id||currentDesign.designId}</span><span className="badge badge-success">{currentDesign.status}</span></> : <span className="text-muted">No design selected</span>}
+              {ws?.selectedProvider ? <span className="text-muted">| Provider: {ws.selectedProvider}</span> : ''}
+              {ws?.selectedPlatform ? <span className="text-muted">| Platform: {ws.selectedPlatform}</span> : ''}
+              {ws?.selectedFidelity ? <span className="text-muted">| Fidelity: {ws.selectedFidelity}</span> : ''}
             </div>
-          );
-        })}
+          </div>
+          <div className="flex-row gap-xs">
+            <span className="badge badge-warning">SANDBOX: ASK</span>
+            <span className="badge badge-danger">CR: BLOCK</span>
+            <span className="badge badge-danger">PROD: BLOCK</span>
+          </div>
+        </div>
       </div>
 
-      {/* Lifecycle Pipeline */}
-      <div className="bg-white border border-gray-200 rounded-lg p-5">
-        <h3 className="text-sm font-semibold text-gray-700 mb-3">Lifecycle State</h3>
-        <div className="flex items-center gap-0 overflow-x-auto">
-          {['Design', 'Plan', 'Execute', 'Observe', 'Validate', 'Verify', 'Evidence', 'Promote'].map((s, i) => {
-            const done = i < (hasPromotion ? 8 : hasExecution ? 3 : 0);
+      {/* Lifecycle */}
+      <div className="panel mb-md">
+        <div className="panel-header"><div className="panel-title">Lifecycle</div></div>
+        <div className="lifecycle">
+          {stages.map((s,i)=>{
+            let dotCls='locked', lineCls='pending', labelCls='locked';
+            if(s.done){ dotCls='complete'; lineCls='complete'; labelCls='complete'; }
+            else if(s.active){ dotCls='active'; labelCls='active'; }
+            else if(i>0&&stages[i-1].done){ dotCls='available'; labelCls='available'; }
+            if(i>0&&stages[i-1].done) lineCls='complete';
             return (
-              <div key={s} className="flex items-center">
-                {i > 0 && <div className={`w-8 h-0.5 ${done ? 'bg-green-500' : 'bg-gray-200'}`} />}
-                <div className="flex flex-col items-center min-w-[64px]">
-                  <div className={`w-3 h-3 rounded-full border-2 ${done ? 'bg-green-500 border-green-500' : 'border-gray-300'}`} />
-                  <span className={`text-[9px] uppercase tracking-wider mt-1 ${done ? 'text-gray-700' : 'text-gray-400'}`}>{s}</span>
-                </div>
+              <div key={s.id} className="lifecycle-stage">
+                {i>0 && <div className={`lifecycle-line ${lineCls}`}/>}
+                <button className="lifecycle-step" onClick={()=>{if(navMap[s.id]) onNavigate(navMap[s.id]);}}>
+                  <div className={`lifecycle-dot ${dotCls}`}/>
+                  <span className={`lifecycle-label ${labelCls}`}>{s.label}</span>
+                </button>
               </div>
             );
           })}
@@ -111,44 +115,32 @@ export default function FlightDeck({ onNavigate }: Props) {
       </div>
 
       {/* Next Action + Safety */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <button onClick={() => onNavigate(nextView)} className="text-left bg-white border border-gray-200 rounded-lg p-5 hover:border-cyan-300 hover:shadow-md transition">
-          <p className="text-xs text-gray-400 uppercase tracking-wide mb-1">NEXT ACTION</p>
-          <p className="text-sm font-medium text-cyan-700">{nextAction}</p>
-          <p className="text-xs text-cyan-600 mt-2">Go to workspace \u2192</p>
+      <div className="grid-2 mb-md">
+        <button onClick={()=>onNavigate(nextView)} className="panel" style={{textAlign:'left',cursor:'pointer',borderColor:'var(--accent)',background:'var(--accent-soft)'}}>
+          <div className="page-eyebrow">Next Action</div>
+          <div style={{fontSize:14,fontWeight:600,color:'var(--accent)',marginTop:4}}>{nextAction}</div>
+          <div style={{fontSize:11,color:'var(--accent)',marginTop:6}}>Go to workspace →</div>
         </button>
-        <div className="bg-white border border-gray-200 rounded-lg p-5">
-          <p className="text-xs text-gray-400 uppercase tracking-wide mb-3">SYSTEM SAFETY</p>
-          <div className="space-y-2 text-sm">
-            <div className="flex justify-between"><span className="text-gray-600">SANDBOX</span><StatusBadge status="ASK" /></div>
-            <div className="flex justify-between"><span className="text-gray-600">CONTROLLED REAL</span><StatusBadge status="BLOCK" /></div>
-            <div className="flex justify-between"><span className="text-gray-600">PRODUCTION</span><StatusBadge status="BLOCK" /></div>
-            <div className="border-t border-gray-100 pt-2 flex justify-between"><span className="text-gray-600">REAL CLOUD VALIDATION</span><StatusBadge status="DEFERRED" /></div>
+        <div className="panel">
+          <div className="panel-title mb-sm">Safety</div>
+          <div className="flex-col" style={{gap:3}}>
+            {[{l:'SANDBOX',s:'ASK',c:'warning'},{l:'CONTROLLED REAL',s:'BLOCK',c:'danger'},{l:'PRODUCTION',s:'BLOCK',c:'danger'}].map(x=>(
+              <div key={x.l} className="flex-between" style={{fontSize:11}}><span className="text-secondary">{x.l}</span><span className={`badge badge-${x.c}`}>{x.s}</span></div>
+            ))}
+            <div style={{borderTop:'1px solid var(--border-subtle)',marginTop:4,paddingTop:4,fontSize:11}} className="flex-between"><span className="text-secondary">REAL CLOUD</span><span className="badge badge-neutral">DEFERRED</span></div>
           </div>
         </div>
       </div>
 
-      {/* Stats */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        {[
-          { value: promos.length, label: 'Promotions', sub: pendingPromos.length > 0 ? `${pendingPromos.length} pending` : '' },
-          { value: runs.length, label: 'Execution Runs', sub: '' },
-          { value: envs.length, label: 'Environments', sub: '' },
-          { value: approvedPromos.length, label: 'Approved', sub: '' },
-        ].map(s => (
-          <div key={s.label} className="bg-white border border-gray-200 rounded-lg p-4">
-            <p className="text-2xl font-semibold text-gray-900">{s.value}</p>
-            <p className="text-xs text-gray-500 uppercase">{s.label}</p>
-            {s.sub && <p className="text-xs text-yellow-600 mt-1">{s.sub}</p>}
-          </div>
-        ))}
-      </div>
-
-      {/* Empty state */}
-      {promos.length === 0 && runs.length === 0 && (
-        <div className="bg-white border border-gray-200 rounded-lg p-10 text-center">
-          <p className="text-gray-400 text-sm">No infrastructure activity yet.</p>
-          <p className="text-xs text-gray-400 mt-1">Start by creating an architecture design.</p>
+      {/* Empty/Create */}
+      {!ws && (
+        <div className="panel empty-state">
+          <div className="empty-state-title">No active workspace</div>
+          <div className="empty-state-desc">Create a workspace to begin infrastructure operations.</div>
+          <button className="btn btn-primary mt-md" onClick={async()=>{
+            try{const r=await api.createWorkspace({name:'INFRA-AGAIN Workspace',provider:'ON_PREM',platform:'NATIVE_VM',fidelity:'LOCAL_RUNTIME'});
+            onWsChange(r.workspace.workspaceId,r.workspace.name);}catch(e){}
+          }}>Create Workspace</button>
         </div>
       )}
     </div>

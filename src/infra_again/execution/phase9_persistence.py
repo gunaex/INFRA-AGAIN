@@ -295,3 +295,71 @@ def list_readiness() -> list[dict]:
         rd = load_readiness(r["readiness_id"])
         if rd: result.append(rd)
     return result
+
+
+# ══════════════════════════════════════════════════════════
+# Workspace persistence (Phase 11.5)
+# ══════════════════════════════════════════════════════════
+
+def _init_workspace(c: sqlite3.Connection) -> None:
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS workspaces (
+            workspace_id TEXT PRIMARY KEY,
+            name TEXT,
+            current_design_id TEXT,
+            current_plan_id TEXT,
+            current_package_id TEXT,
+            current_run_id TEXT,
+            selected_provider TEXT,
+            selected_platform TEXT,
+            selected_fidelity TEXT,
+            created_at TEXT,
+            updated_at TEXT
+        );
+    """)
+    c.commit()
+
+# Call workspace init from main _init
+import sqlite3 as _sql
+_orig_init = _init
+def _init(c: _sql.Connection) -> None:
+    _orig_init(c)
+    _init_workspace(c)
+
+# Replace _init in module scope
+_init.__module__ = __name__
+
+
+def persist_workspace(ws: dict) -> None:
+    c = _conn()
+    c.execute("""INSERT OR REPLACE INTO workspaces VALUES (?,?,?,?,?,?,?,?,?,?,?)""", (
+        ws["workspaceId"], ws.get("name",""),
+        ws.get("currentDesignId",""), ws.get("currentPlanId",""),
+        ws.get("currentPackageId",""), ws.get("currentRunId",""),
+        ws.get("selectedProvider",""), ws.get("selectedPlatform",""),
+        ws.get("selectedFidelity",""),
+        ws.get("createdAt",""), ws.get("updatedAt",""),
+    ))
+    c.commit()
+    c.close()
+
+def load_workspace(workspace_id: str) -> Optional[dict]:
+    c = _conn()
+    row = c.execute("SELECT * FROM workspaces WHERE workspace_id=?", (workspace_id,)).fetchone()
+    c.close()
+    if not row: return None
+    d = dict(row)
+    return {
+        "workspaceId": d["workspace_id"], "name": d["name"],
+        "currentDesignId": d["current_design_id"], "currentPlanId": d["current_plan_id"],
+        "currentPackageId": d["current_package_id"], "currentRunId": d["current_run_id"],
+        "selectedProvider": d["selected_provider"], "selectedPlatform": d["selected_platform"],
+        "selectedFidelity": d["selected_fidelity"],
+        "createdAt": d["created_at"], "updatedAt": d["updated_at"],
+    }
+
+def list_workspaces() -> list[dict]:
+    c = _conn()
+    rows = c.execute("SELECT workspace_id FROM workspaces ORDER BY updated_at DESC").fetchall()
+    c.close()
+    return [load_workspace(r["workspace_id"]) for r in rows if load_workspace(r["workspace_id"])]

@@ -1,45 +1,20 @@
 
 import { useState, useEffect } from 'react';
 import { api } from '../../lib/api';
-
-export default function RecoveryCenter() {
-  const [plans, setPlans] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  useEffect(() => {
-    api.rollbackPlans().then((d: any) => { setPlans(d.rollbackPlans || []); setLoading(false); }).catch(() => setLoading(false));
-  }, []);
-  if (loading) return <p className="text-gray-500 text-sm">Loading…</p>;
-
-  return (
-    <div className="space-y-6">
-      <div>
-        <p className="text-xs text-gray-400 uppercase tracking-wide">Recovery Center</p>
-        <h2 className="text-xl font-semibold text-gray-900">Rollback & Recovery</h2>
-        <p className="text-sm text-gray-500 mt-1">Rollback executor success ≠ Recovery verified. Unknown state never equals SUCCESS.</p>
-      </div>
-      <div className="bg-white border border-gray-200 rounded-lg p-5">
-        <h3 className="text-sm font-semibold text-gray-700 mb-3">Rollback Plans</h3>
-        {plans.length === 0 ? (
-          <p className="text-sm text-gray-400 py-8 text-center">No rollback plans. Define plans with trigger conditions, recovery steps, and verification.</p>
-        ) : (
-          <table className="w-full text-sm">
-            <thead><tr className="border-b border-gray-100 text-left text-xs text-gray-400 uppercase tracking-wider">
-              <th className="pb-2 pr-4">ID</th><th className="pb-2 pr-4">Status</th><th className="pb-2 pr-4">Owner</th><th className="pb-2 pr-4">Recovery State</th><th className="pb-2">Max Duration</th>
-            </tr></thead>
-            <tbody>
-              {plans.map((p: any) => (
-                <tr key={p.rollbackId} className="border-b border-gray-50">
-                  <td className="py-2 pr-4 font-mono text-xs text-gray-500">{p.rollbackId}</td>
-                  <td className="py-2 pr-4"><span className={`px-2 py-0.5 rounded-full text-xs ${p.status==='APPROVED'?'bg-green-100 text-green-700':'bg-gray-100 text-gray-600'}`}>{p.status}</span></td>
-                  <td className="py-2 pr-4 text-gray-600">{p.owner||'-'}</td>
-                  <td className="py-2 pr-4 text-gray-600">{p.expectedRecoveryState||'-'}</td>
-                  <td className="py-2 text-gray-600">{p.maxDurationSeconds}s</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+export default function RecoveryCenter({ actor, wsId }:{actor:{name:string;role:string};wsId:string}) {
+  const [plans,setPlans]=useState<any[]>([]);
+  const [msg,setMsg]=useState('');
+  const [show,setShow]=useState(false);
+  const [form,setForm]=useState({triggerConditions:'',rollbackSteps:'',expectedRecoveryState:''});
+  const load=()=>api.rollbacks().then((d:any)=>setPlans(d.rollbackPlans||[])).catch(()=>{});
+  useEffect(()=>{load();},[]);
+  const create=async()=>{try{await api.createRollback({triggerConditions:[form.triggerConditions],rollbackSteps:[form.rollbackSteps],verificationSteps:[],expectedRecoveryState:form.expectedRecoveryState,owner:actor.name});setMsg('Rollback plan created');load();setShow(false);}catch(e:any){setMsg('Error: '+e.message);}};
+  return (<div className="page">
+    <div className="mb-lg"><div className="page-eyebrow">Recovery Center</div><div className="flex-between"><h2 className="page-title">Rollback & Recovery</h2><button className="btn btn-primary" onClick={()=>setShow(!show)}>+ Create Rollback</button></div><p className="page-subtitle">Rollback executor success \u2260 Recovery verified.</p></div>
+    {msg&&<div className="msg-info">{msg}</div>}
+    {show&&(<div className="panel mb-md"><div className="panel-title mb-sm">New Rollback Plan</div><input className="form-input" placeholder="Trigger conditions" value={form.triggerConditions} onChange={e=>setForm({...form,triggerConditions:e.target.value})}/><input className="form-input" placeholder="Rollback steps" value={form.rollbackSteps} onChange={e=>setForm({...form,rollbackSteps:e.target.value})}/><input className="form-input" placeholder="Expected recovery state" value={form.expectedRecoveryState} onChange={e=>setForm({...form,expectedRecoveryState:e.target.value})}/><div className="flex-row gap-sm"><button className="btn btn-primary" onClick={create}>Create</button><button className="btn btn-secondary" onClick={()=>setShow(false)}>Cancel</button></div></div>)}
+    <div className="panel"><div className="panel-header"><div className="panel-title">Rollback Plans</div></div>
+      {plans.length===0?<div className="empty-state"><div className="empty-state-title">No rollback plans</div></div>:<div className="flex-col gap-sm">{plans.map((p:any)=>(<div key={p.rollbackId} className="panel" style={{background:'var(--bg-elevated)'}}><div className="flex-between mb-sm"><span className="mono">{p.rollbackId}</span><span className={`badge ${p.status==='APPROVED'?'badge-success':'badge-neutral'}`}>{p.status}</span></div><div className="text-secondary mb-sm" style={{fontSize:11}}>Recovery: {p.expectedRecoveryState||'-'} \u00b7 Owner: {p.owner||'-'}</div>{p.status==='DRAFT'&&<button className="btn btn-primary btn-sm" onClick={async()=>{try{await api.approveRollback(p.rollbackId,actor.name);load();setMsg('Approved');}catch(e:any){setMsg('Error: '+e.message);}}}>Approve</button>}</div>))}</div>}
     </div>
-  );
+  </div>);
 }

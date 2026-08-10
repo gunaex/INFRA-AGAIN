@@ -592,3 +592,59 @@ def register_promotion_routes(app: FastAPI) -> None:
         rd = persist.load_readiness(readiness_id)
         if not rd: raise HTTPException(404)
         return {"readiness": rd, "PRODUCTION_EXECUTION_ALLOWED": False, "PRODUCTION": "BLOCK"}
+
+    # ══════════════════════════════════════════════════════
+    # WORKSPACE (Phase 11.5)
+    # ══════════════════════════════════════════════════════
+    @app.post("/api/v1/workspaces")
+    async def create_workspace(body: dict[str, Any]):
+        ws_id = f"WS-{uuid4().hex[:8].upper()}"
+        ws = {
+            "workspaceId": ws_id, "name": body.get("name",""),
+            "currentDesignId": "", "currentPlanId": "",
+            "currentPackageId": "", "currentRunId": "",
+            "selectedProvider": body.get("provider",""),
+            "selectedPlatform": body.get("platform",""),
+            "selectedFidelity": body.get("fidelity","LOCAL_RUNTIME"),
+            "createdAt": _now(), "updatedAt": _now(),
+        }
+        persist.persist_workspace(ws)
+        return {"workspace": ws}
+
+    @app.get("/api/v1/workspaces")
+    async def list_workspaces():
+        return {"workspaces": persist.list_workspaces()}
+
+    @app.get("/api/v1/workspaces/{workspace_id}")
+    async def get_workspace(workspace_id: str):
+        ws = persist.load_workspace(workspace_id)
+        if not ws: raise HTTPException(404)
+        return {"workspace": ws}
+
+    @app.post("/api/v1/workspaces/{workspace_id}/current-design")
+    async def set_current_design(workspace_id: str, design_id: str = ""):
+        ws = persist.load_workspace(workspace_id)
+        if not ws: raise HTTPException(404)
+        ws["currentDesignId"] = design_id
+        ws["updatedAt"] = _now()
+        persist.persist_workspace(ws)
+        return {"workspace": ws}
+
+    @app.post("/api/v1/workspaces/{workspace_id}/current-plan")
+    async def set_current_plan(workspace_id: str, plan_id: str = ""):
+        ws = persist.load_workspace(workspace_id)
+        if not ws: raise HTTPException(404)
+        ws["currentPlanId"] = plan_id
+        ws["updatedAt"] = _now()
+        persist.persist_workspace(ws)
+        return {"workspace": ws}
+
+    @app.post("/api/v1/workspaces/{workspace_id}/current-package")
+    async def set_current_package(workspace_id: str, package_id: str = ""):
+        ws = persist.load_workspace(workspace_id)
+        if not ws: raise HTTPException(404)
+        ws["currentPackageId"] = package_id
+        ws["updatedAt"] = _now()
+        persist.persist_workspace(ws)
+        return {"workspace": ws}
+
