@@ -418,6 +418,15 @@ async def list_snapshots():
 # ===========================================================================
 # Infra Pulse + Design Review API (Phase 5)
 # ===========================================================================
+# Infra Pulse + Design Review API (Phase 5)
+# ===========================================================================
 
 from ..flow.api import register_flow_routes
 register_flow_routes(app)
+
+# ===========================================================================
+# Implementation Planning API (Phase 6)
+# ===========================================================================
+
+from ..implementation.api import register_impl_routes
+register_impl_routes(app)
