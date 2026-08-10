@@ -240,7 +240,7 @@ body {
 .lifecycle-label.complete { color: var(--text-secondary); }
 .lifecycle-label.active { color: var(--text-primary); font-weight: var(--fw-medium); }
 .lifecycle-label.available { color: var(--text-muted); }
-.lifecycle-label.locked { color: var(--text-disabled); }
+.lifecycle-label.locked { color: var(--text-muted); }
 
 /* ══════════════════════════════════════════════════════════
    EMPTY / ERROR / LOADING

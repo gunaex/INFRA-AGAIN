@@ -96,7 +96,7 @@ export default function FlightDeck({ onNavigate, wsId, wsName, onWsChange }: Pro
         <div className="panel-header"><div className="panel-title">Lifecycle</div></div>
         <div className="lifecycle">
           {stages.map((s,i)=>{
-            let dotCls='locked', lineCls='pending', labelCls='locked';
+            let dotCls='available', lineCls='pending', labelCls='available';
             if(s.done){ dotCls='complete'; lineCls='complete'; labelCls='complete'; }
             else if(s.active){ dotCls='active'; labelCls='active'; }
             else if(i>0&&stages[i-1].done){ dotCls='available'; labelCls='available'; }
