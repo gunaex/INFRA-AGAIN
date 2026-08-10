@@ -71,6 +71,7 @@ run_gate "ISO" "Test Endpoint Isolation" "03-test-isolation.py" || true
 run_gate "HARDEN" "Phase 8.2-9 Hardening + Readiness" "04-hardening-phase9.py" || true
 run_gate "ADMIN" "Phase 9.1.1 Admin Airlock + Safety Belt" "05-admin-airlock-tests.py" || true
 run_gate "WIRE" "Phase 9.1.2 Real-Path Safety Wiring" "06-real-path-wiring.py" || true
+run_gate "PROMO" "Phase 9.2 Promotion Gate" "08-promotion-gate.py" || true
 
 # Gate 7: Real AWS S3 Sandbox — only runs with explicit opt-in
 if [ "${INFRA_AGAIN_REAL_AWS_SANDBOX:-}" = "1" ]; then

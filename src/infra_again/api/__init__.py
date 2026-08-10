@@ -444,3 +444,10 @@ register_execution_routes(app)
 
 from ..execution.sandbox_api import register_sandbox_routes
 register_sandbox_routes(app)
+
+# ===========================================================================
+# Promotion API (Phase 9.2)
+# ===========================================================================
+
+from ..execution.phase9_api import register_promotion_routes
+register_promotion_routes(app)

@@ -333,3 +333,126 @@ def create_controlled_real_target(account_id: str = "", region: str = "") -> Env
         cost_ceiling=0.0,
         production=False,
     )
+
+
+# ============================================================================
+# Phase 9.2 — Promotion Status + Transition Rules
+# ============================================================================
+
+
+class PromotionStatus(str, Enum):
+    DRAFT = "DRAFT"
+    PENDING_APPROVAL = "PENDING_APPROVAL"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+    EXPIRED = "EXPIRED"
+    CONSUMED = "CONSUMED"
+    INVALIDATED = "INVALIDATED"
+
+
+ALLOWED_TRANSITIONS = {
+    (EnvironmentClassification.SANDBOX, EnvironmentClassification.CONTROLLED_REAL),
+    (EnvironmentClassification.CONTROLLED_REAL, EnvironmentClassification.PRODUCTION),
+}
+
+
+BLOCKED_TRANSITIONS = [
+    (EnvironmentClassification.SANDBOX, EnvironmentClassification.PRODUCTION),
+    (EnvironmentClassification.PRODUCTION, EnvironmentClassification.SANDBOX),
+    (EnvironmentClassification.PRODUCTION, EnvironmentClassification.CONTROLLED_REAL),
+]
+
+
+def validate_transition(source: EnvironmentClassification, target: EnvironmentClassification) -> tuple[bool, str]:
+    """Validate environment promotion transition."""
+    if source == target:
+        return False, "INVALID_ENVIRONMENT_TRANSITION: source == target"
+    if (source, target) in ALLOWED_TRANSITIONS:
+        return True, "VALID_TRANSITION"
+    if (source, target) in BLOCKED_TRANSITIONS:
+        return False, f"INVALID_ENVIRONMENT_TRANSITION: {source.value} → {target.value} is blocked"
+    return False, f"INVALID_ENVIRONMENT_TRANSITION: unknown transition {source.value} → {target.value}"
+
+
+# ============================================================================
+# PromotionPackage extensions (Phase 9.2)
+# ============================================================================
+
+
+def compute_promotion_digest(pkg: PromotionPackage) -> str:
+    """Canonical SHA256 digest of promotion package."""
+    import hashlib, json
+    data = {
+        "sourceEnv": pkg.target_environment.classification.value if hasattr(pkg, 'target_environment') else "",
+        "targetEnv": "",  # set externally
+        "planId": pkg.source_plan_checksum,
+        "pkgId": pkg.source_implementation_checksum,
+        "executionId": pkg.source_execution_id,
+        "evidenceDigest": pkg.evidence_checksum,
+        "blastRadius": pkg.target_environment.blast_radius.value if hasattr(pkg, 'target_environment') else "",
+        "rollbackId": pkg.rollback_plan.plan_id,
+        "maintenanceWindow": pkg.maintenance_window.window_id,
+        "requestedBy": pkg.executor,
+        "createdAt": pkg.created_at,
+    }
+    return hashlib.sha256(json.dumps(data, sort_keys=True).encode()).hexdigest()[:16]
+
+
+# Extend PromotionPackage with promotion-specific fields
+# We add these as class-level defaults through monkey-patching since we can't modify the dataclass directly
+PromotionPackage.promotion_digest = ""
+PromotionPackage.promotion_status = PromotionStatus.DRAFT
+PromotionPackage.source_env: Any = None  # type: ignore
+PromotionPackage.target_env: Any = None  # type: ignore
+
+
+def promotion_seal(self: PromotionPackage, source_env: Any, target_env: Any, requested_by: str = "") -> tuple[bool, str]:
+    """Seal promotion package with digest."""
+    valid, msg = validate_transition(source_env.classification, target_env.classification)
+    if not valid:
+        return False, msg
+    self.promotion_status = PromotionStatus.PENDING_APPROVAL
+    self.executor = requested_by
+    self.source_env = source_env
+    self.target_env = target_env
+    self.promotion_digest = compute_promotion_digest(self)
+    return True, self.promotion_digest
+
+
+def promotion_approve(self: PromotionPackage, approved_by: str) -> tuple[bool, str]:
+    """Approve promotion. Requires separation of duties."""
+    if self.promotion_status != PromotionStatus.PENDING_APPROVAL:
+        return False, f"PROMOTION_PACKAGE_INVALID: status is {self.promotion_status.value}"
+    if self.executor == approved_by:
+        return False, "SEPARATION_OF_DUTIES_VIOLATION: requester == approver"
+    if not self.approvers:
+        self.approvers = []
+    self.approvers.append(approved_by)
+    self.promotion_status = PromotionStatus.APPROVED
+    return True, f"APPROVED by {approved_by}"
+
+
+def promotion_consume(self: PromotionPackage) -> tuple[bool, str]:
+    """Consume approved promotion (single-use)."""
+    if self.promotion_status != PromotionStatus.APPROVED:
+        return False, f"PROMOTION_PACKAGE_INVALID: status is {self.promotion_status.value}"
+    self.promotion_status = PromotionStatus.CONSUMED
+    return True, "CONSUMED"
+
+
+def promotion_verify_digest(self: PromotionPackage) -> tuple[bool, str]:
+    """Verify promotion digest hasn't changed."""
+    if self.promotion_status in (PromotionStatus.CONSUMED, PromotionStatus.INVALIDATED, PromotionStatus.EXPIRED):
+        return False, f"PROMOTION_PACKAGE_{self.promotion_status.value.upper()}"
+    current = compute_promotion_digest(self)
+    if current != getattr(self, 'promotion_digest', ''):
+        self.promotion_status = PromotionStatus.INVALIDATED
+        return False, "PROMOTION_INVALIDATED: digest mismatch"
+    return True, "DIGEST_VALID"
+
+
+# Attach methods
+PromotionPackage.seal_promotion = promotion_seal
+PromotionPackage.approve_promotion = promotion_approve
+PromotionPackage.consume_promotion = promotion_consume
+PromotionPackage.verify_promotion_digest = promotion_verify_digest
