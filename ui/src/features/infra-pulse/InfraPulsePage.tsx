@@ -63,8 +63,8 @@ export default function InfraPulsePage() {
   const [view, setView] = useState<'flow' | 'review'>('flow');
   const [loading, setLoading] = useState(false);
 
-  const [nodes, setNodes, onNodesChange] = useNodesState([]);
-  const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+  const [nodes, setNodes, onNodesChange] = useNodesState<Node>([]);
+  const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
 
   // Create design
   const createDesign = useCallback(async () => {
@@ -293,7 +293,7 @@ export default function InfraPulsePage() {
 
             {selectedNode && flow && (
               <FlowDetailsPanel nodeId={selectedNode} flow={flow}
-                state={nodes.find((n) => n.id === selectedNode)?.data?.state}
+                state={(nodes.find((n) => n.id === selectedNode)?.data as Record<string, any>)?.state}
                 bottleneck={simResult?.bottlenecks?.find((b) => b.nodeId === selectedNode)} />
             )}
           </div>

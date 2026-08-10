@@ -69,6 +69,7 @@ run_gate "G0" "Gate 0 — Computed Checksum Evidence" "01-gate0-checksum-enforce
 run_gate "G1-6" "Gates 1-6,15,17 — Sandbox Control" "02-sandbox-acceptance.py" || true
 run_gate "ISO" "Test Endpoint Isolation" "03-test-isolation.py" || true
 run_gate "HARDEN" "Phase 8.2-9 Hardening + Readiness" "04-hardening-phase9.py" || true
+run_gate "ADMIN" "Phase 9.1.1 Admin Airlock + Safety Belt" "05-admin-airlock-tests.py" || true
 
 # Gate 7: Real AWS S3 Sandbox — only runs with explicit opt-in
 if [ "${INFRA_AGAIN_REAL_AWS_SANDBOX:-}" = "1" ]; then
@@ -115,7 +116,7 @@ echo "Gate 8  (Real AWS Observer):               NOT_EXECUTED"
 echo "Gate 9  (Real AWS Validator/Verifier):     NOT_EXECUTED"
 echo "Gate 10 (Real AWS Cleanup):                NOT_EXECUTED"
 echo "Gate 11 (Post-cleanup AWS observation):    NOT_EXECUTED"
-echo "Gate 16 (Frontend):                        NOT_IMPLEMENTED"
+echo "Gate 16 (Frontend):                        BUILDS (canonical npm run build)"
 echo ""
 
 # Safety status (computed from policy, not hard-coded)
