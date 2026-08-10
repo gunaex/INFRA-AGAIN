@@ -174,12 +174,41 @@ def register_execution_routes(app: FastAPI) -> None:
             raise HTTPException(status_code=400, detail=f"Package not ready: {pkg.status.value}")
 
         # =====================================================================
-        # Gate 0: PLAN CHECKSUM ENFORCEMENT — compare package-bound checksum
-        # against the current authoritative approved plan checksum BEFORE any
-        # executor invocation.  This is the production execution path guard.
+        # Gate 0: PLAN ID + CHECKSUM ENFORCEMENT
+        # Guard 1: package's plan must be the current approved plan
+        # Guard 2: package's checksum must match current plan's checksum
         # =====================================================================
         current_plan = _lookup_plan(pkg.plan_id)
-        if current_plan and pkg.plan_checksum:
+        if current_plan:
+            current_plan_id = getattr(current_plan, 'plan_id', '')
+
+            # Guard 1: PLAN_ID_MISMATCH — verify this plan is still the current
+            # approved plan by checking against the most recent APPROVED plan
+            # for the same design.
+            current_design_id = getattr(current_plan, 'design_id', '')
+            if current_design_id:
+                from ..implementation.persistence import load_plans_for_design
+                all_plans = load_plans_for_design(current_design_id)
+                approved_plans = [p for p in all_plans
+                                  if getattr(p, 'status', None) and str(p.status.value) == 'APPROVED_FOR_EXECUTION']
+                if approved_plans:
+                    latest_approved_id = approved_plans[0].plan_id
+                    if pkg.plan_id != latest_approved_id:
+                        raise HTTPException(
+                            status_code=409,
+                            detail={
+                                "error": "PLAN_ID_MISMATCH",
+                                "packagePlanId": pkg.plan_id,
+                                "currentApprovedPlanId": latest_approved_id,
+                                "message": (
+                                    "The execution package was created from a plan "
+                                    "that is no longer the current approved plan. "
+                                    "A newer plan has been approved. Re-create the "
+                                    "execution package from the current approved plan."
+                                ),
+                            },
+                        )
+
             current_checksum = getattr(current_plan, 'plan_checksum', '')
             if current_checksum and pkg.plan_checksum != current_checksum:
                 raise HTTPException(
