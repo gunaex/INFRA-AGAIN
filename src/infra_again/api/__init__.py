@@ -430,3 +430,10 @@ register_flow_routes(app)
 
 from ..implementation.api import register_impl_routes
 register_impl_routes(app)
+
+# ===========================================================================
+# Execution API (Phase 7)
+# ===========================================================================
+
+from ..execution.api import register_execution_routes
+register_execution_routes(app)
