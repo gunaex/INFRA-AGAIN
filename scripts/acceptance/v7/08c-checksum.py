@@ -51,7 +51,7 @@ def main(log_dir):
     print(f"  CHECKSUM_MISMATCH_BLOCKED=true")
     print(f"  CHECKSUM_MISMATCH_EXECUTOR_INVOCATIONS=0")
 
-    # Test 3: Real cloud SANDBOX → ASK (Phase 8), not BLOCK
+    # Test 3: Real cloud → BLOCK, executor=0
     real_task = ExecutionTask(execution_task_id="ET-REAL", implementation_task_id="IT-R",
         work_package_id="WP-R", title="Real Cloud Test",
         action_type=ActionType.APPLY_LOCAL_IAC,
@@ -59,8 +59,8 @@ def main(log_dir):
     real_target = ExecutionTarget(target_id="real-aws", target_type="AWS",
         fidelity=ExecutionFidelity.SANDBOX, endpoint_reference="https://s3.amazonaws.com")
     real_decision = ExecutionPolicyEngine.evaluate(real_task, real_target)
-    assert real_decision.verdict == PolicyVerdict.ASK, f"SANDBOX should ASK, got {real_decision.verdict.value}"
-    print(f"  REAL_AWS_SANDBOX: ASK (requires sandbox approval)")
+    assert real_decision.verdict == PolicyVerdict.BLOCK
+    print(f"  REAL_AWS: BLOCK (REAL_CLOUD_EXECUTION_NOT_ALLOWED_IN_PHASE_7)")
     print(f"  REAL_AWS_EXECUTOR_INVOCATIONS=0")
 
     # Test 4: Production → BLOCK, executor=0

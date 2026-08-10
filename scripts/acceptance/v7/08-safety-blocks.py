@@ -14,13 +14,14 @@ def main(log_dir):
         requested_fidelity=ExecutionFidelity.LOCAL_RUNTIME,
     )
     
-    # Test 1: Real AWS SANDBOX endpoint → ASK (Phase 8: requires sandbox approval)
+    # Test 1: Real AWS endpoint → BLOCK
     real_aws = ExecutionTarget(target_id="real-aws", target_type="AWS",
                                fidelity=ExecutionFidelity.SANDBOX,
                                endpoint_reference="https://s3.amazonaws.com")
     d = ExecutionPolicyEngine.evaluate(task, real_aws)
-    assert d.verdict == PolicyVerdict.ASK, f"Real AWS SANDBOX should ASK, got {d.verdict.value}"
-    print(f"  Real AWS SANDBOX: ASK ({d.reason_code})")
+    assert d.verdict == PolicyVerdict.BLOCK, f"Real AWS should BLOCK, got {d.verdict.value}"
+    assert "REAL_CLOUD" in d.reason_code
+    print(f"  Real AWS: BLOCK ({d.reason_code})")
     
     # Test 2: Production → BLOCK
     prod = ExecutionTarget(target_id="prod", target_type="AWS_PRODUCTION",

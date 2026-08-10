@@ -21,6 +21,7 @@ from .preflight import PreflightEngine
 from .policy import ExecutionPolicyEngine
 from .registry import LocalExecutionTargetRegistry
 from .persistence import ExecutionPersistence
+from .instrumentation import ExecutionInstrumentation
 
 _persistence = ExecutionPersistence()
 
@@ -228,6 +229,9 @@ def register_execution_routes(app: FastAPI) -> None:
         add_event("PREFLIGHT_PASSED")
         add_event("POLICY_ALLOWED", data={"verdict": pkg.policy_decision.verdict.value})
 
+        # INSTRUMENTATION: Run entered EXECUTING phase
+        ExecutionInstrumentation.record_run_entered_executing()
+
         # Execute tasks (synchronous for local Phase 7)
         passed = 0
         failed = 0
@@ -239,6 +243,7 @@ def register_execution_routes(app: FastAPI) -> None:
         import tempfile
         for task in pkg.tasks:
             add_event("TASK_STARTED", task_id=task.execution_task_id)
+            ExecutionInstrumentation.record_task_started()
             task.status = ExecutionTaskStatus.EXECUTING
 
             try:
@@ -256,6 +261,10 @@ def register_execution_routes(app: FastAPI) -> None:
                     raise ValueError(f"Unsupported target: {pkg.target.target_type}")
 
                 with tempfile.TemporaryDirectory() as work_dir:
+                    ExecutionInstrumentation.record_executor_invocation()
+                    # Record target mutation for APPLY actions
+                    if task.action_type.value.startswith("APPLY") or task.action_type.value.startswith("CREATE"):
+                        ExecutionInstrumentation.record_target_mutation()
                     result = await executor.execute(task, pkg.target, work_dir, pkg.correlation_id)
 
                 if result.get("status") == "COMPLETED":
@@ -406,3 +415,22 @@ def register_execution_routes(app: FastAPI) -> None:
         from ..implementation.persistence import persist_plan
         persist_plan(plan)
         return {"planId": plan_id, "forcedChecksum": new_checksum}
+
+    # =========================================================================
+    # Instrumentation endpoint — query/reset execution counters for acceptance
+    # evidence.  Available in acceptance mode only.
+    # =========================================================================
+    @app.get("/api/v1/_test/instrumentation")
+    async def _test_get_instrumentation():
+        """Get current execution instrumentation counters."""
+        if not os.environ.get("INFRA_AGAIN_ACCEPTANCE"):
+            raise HTTPException(status_code=404, detail="Not found")
+        return ExecutionInstrumentation.evidence()
+
+    @app.post("/api/v1/_test/instrumentation/reset")
+    async def _test_reset_instrumentation():
+        """Reset execution instrumentation counters."""
+        if not os.environ.get("INFRA_AGAIN_ACCEPTANCE"):
+            raise HTTPException(status_code=404, detail="Not found")
+        ExecutionInstrumentation.reset()
+        return {"reset": True, "evidence": ExecutionInstrumentation.evidence()}
