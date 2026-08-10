@@ -1,12 +1,25 @@
 #!/usr/bin/env python3
 """Gate 07: API runtime — real uvicorn, create/approve/handoff."""
-import sys, time, json, os, subprocess, signal, urllib.request, urllib.error
+import sys, time, json, os, subprocess, signal, socket, urllib.request, urllib.error
 PYTHON = sys.executable
 PROJECT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-PORT = 18094  # Dedicated port to avoid conflict with V5.1 runner
+DEFAULT_PORT = 18094
+
+def _free_port(start=DEFAULT_PORT, end=DEFAULT_PORT+50):
+    """Find a free localhost port, starting from start."""
+    for p in range(start, end):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(("127.0.0.1", p))
+                return p
+            except OSError:
+                continue
+    raise RuntimeError(f"PORT_IN_USE: no free port in {start}-{end}")
+
 def main(log_dir):
     db = os.path.join(log_dir, "api-impl.db")
     os.environ["INFRA_AGAIN_DB"] = db
+    PORT = _free_port()
     def post(url): req=urllib.request.Request(f"http://127.0.0.1:{PORT}{url}",method="POST"); return _call(req)
     def get(url): req=urllib.request.Request(f"http://127.0.0.1:{PORT}{url}"); return _call(req)
     def _call(req):
