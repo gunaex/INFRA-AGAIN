@@ -43,8 +43,10 @@ class InfraIdentityMiddleware(BaseHTTPMiddleware):
                 return JSONResponse({"detail": "Test routes unavailable"}, status_code=404)
             design_write = request.method == "POST" and (
                 path == "/api/v1/designs" or path == "/api/v1/capabilities/compare"
+                or path == "/api/v1/workspaces"
                 or re.fullmatch(r"/api/v1/designs/[A-Za-z0-9_-]+/(generate|simulate|accept|request-change|update-flow|implementation-plan)", path)
                 or re.fullmatch(r"/api/v1/implementation-plans/[A-Za-z0-9_-]+/(approve|request-change)", path)
+                or re.fullmatch(r"/api/v1/workspaces/[A-Za-z0-9_-]+/current-design", path)
             )
             if request.method not in {"GET", "HEAD"} and not design_write:
                 return JSONResponse({"detail": "Execution and provider changes require an approval-bound gateway"}, status_code=403)
