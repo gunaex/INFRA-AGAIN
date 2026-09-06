@@ -231,11 +231,10 @@ def register_flow_routes(app: FastAPI) -> None:
 
     @app.post("/api/v1/designs")
     async def create_design(name: str = "", description: str = ""):
-        design = DesignBaseline(
-            design_id=f"DESIGN-{len(_designs)+1:06d}",
-        )
+        design = DesignBaseline()
         design.metadata = {"name": name, "description": description}
         _designs[design.design_id] = design
+        _persist_design(design)
         return {"design": design.to_dict()}
 
     @app.get("/api/v1/designs/{design_id}")
