@@ -16,8 +16,14 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 from .models import (
-    DesignBaseline, DesignStatus, FlowDefinition, FlowPlaybackState,
-    ScenarioId, MetricSource, SimulationMode, FlowEvent,
+    DesignBaseline,
+    DesignStatus,
+    FlowDefinition,
+    FlowPlaybackState,
+    ScenarioId,
+    MetricSource,
+    SimulationMode,
+    FlowEvent,
 )
 from .simulator import FlowSimulator, create_demo_flow
 from .reducer import reduce_state
@@ -27,6 +33,7 @@ from .reducer import reduce_state
 # ============================================================================
 
 import os as _os
+
 DB_PATH = _os.environ.get("INFRA_AGAIN_DB", str(Path(".ai/infra-again.db").resolve()))
 
 
@@ -69,39 +76,54 @@ def _init_tables(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def _persist_design(design: DesignBaseline, flow: FlowDefinition | None = None) -> None:
+def _persist_design(
+    design: DesignBaseline, flow: FlowDefinition | dict[str, Any] | None = None
+) -> None:
     conn = _get_conn()
     try:
         now = datetime.now(timezone.utc).isoformat()
-        conn.execute("""
+        conn.execute(
+            """
             INSERT OR REPLACE INTO flow_designs
             (design_id, name, description, revision, status,
              requirements_checksum, architecture_checksum, flow_checksum, flow_json,
              accepted_at, accepted_by, created_at, updated_at)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
-        """, (
-            design.design_id,
-            design.metadata.get("name", ""),
-            design.metadata.get("description", ""),
-            design.revision,
-            design.status.value,
-            design.requirements_checksum,
-            design.architecture_checksum,
-            design.flow_checksum,
-            json.dumps(flow.to_dict()) if flow else "",
-            design.accepted_at,
-            design.accepted_by,
-            design.created_at or now,
-            now,
-        ))
+        """,
+            (
+                design.design_id,
+                design.metadata.get("name", ""),
+                design.metadata.get("description", ""),
+                design.revision,
+                design.status.value,
+                design.requirements_checksum,
+                design.architecture_checksum,
+                design.flow_checksum,
+                json.dumps(flow if isinstance(flow, dict) else flow.to_dict()) if flow else "",
+                design.accepted_at,
+                design.accepted_by,
+                design.created_at or now,
+                now,
+            ),
+        )
         # Persist change requests
-        conn.execute("DELETE FROM flow_design_change_requests WHERE design_id=?", (design.design_id,))
+        conn.execute(
+            "DELETE FROM flow_design_change_requests WHERE design_id=?", (design.design_id,)
+        )
         for cr in design.change_requests:
-            conn.execute("""
+            conn.execute(
+                """
                 INSERT INTO flow_design_change_requests (design_id, comment, node_id, severity, timestamp)
                 VALUES (?,?,?,?,?)
-            """, (design.design_id, cr.get("comment", ""), cr.get("nodeId", ""),
-                  cr.get("severity", "INFO"), cr.get("timestamp", "")))
+            """,
+                (
+                    design.design_id,
+                    cr.get("comment", ""),
+                    cr.get("nodeId", ""),
+                    cr.get("severity", "INFO"),
+                    cr.get("timestamp", ""),
+                ),
+            )
         conn.commit()
     finally:
         conn.close()
@@ -130,8 +152,12 @@ def _load_design(design_id: str) -> DesignBaseline | None:
             "SELECT * FROM flow_design_change_requests WHERE design_id=? ORDER BY id", (design_id,)
         ).fetchall()
         design.change_requests = [
-            {"comment": cr["comment"], "nodeId": cr["node_id"],
-             "severity": cr["severity"], "timestamp": cr["timestamp"]}
+            {
+                "comment": cr["comment"],
+                "nodeId": cr["node_id"],
+                "severity": cr["severity"],
+                "timestamp": cr["timestamp"],
+            }
             for cr in crs
         ]
         return design
@@ -142,7 +168,9 @@ def _load_design(design_id: str) -> DesignBaseline | None:
 def _load_all_designs() -> list[DesignBaseline]:
     conn = _get_conn()
     try:
-        rows = conn.execute("SELECT design_id FROM flow_designs ORDER BY updated_at DESC").fetchall()
+        rows = conn.execute(
+            "SELECT design_id FROM flow_designs ORDER BY updated_at DESC"
+        ).fetchall()
         designs = []
         for r in rows:
             d = _load_design(r["design_id"])
@@ -156,7 +184,9 @@ def _load_all_designs() -> list[DesignBaseline]:
 def _load_design_flow(design_id: str) -> FlowDefinition | None:
     conn = _get_conn()
     try:
-        row = conn.execute("SELECT flow_json FROM flow_designs WHERE design_id=?", (design_id,)).fetchone()
+        row = conn.execute(
+            "SELECT flow_json FROM flow_designs WHERE design_id=?", (design_id,)
+        ).fetchone()
         if row and row["flow_json"]:
             data = json.loads(row["flow_json"])
             return _reconstruct_flow(data)
@@ -168,31 +198,46 @@ def _load_design_flow(design_id: str) -> FlowDefinition | None:
 def _reconstruct_flow(data: dict) -> FlowDefinition:
     """Reconstruct FlowDefinition from persisted JSON."""
     from .models import FlowNode, FlowEdge, FlowType, NodeCategory, FlowNodeState, FlowEdgeState
+
     nodes = []
     for nd in data.get("nodes", []):
         cat = nd.get("category", "APPLICATION")
-        nodes.append(FlowNode(
-            node_id=nd.get("nodeId", ""), label=nd.get("label", ""),
-            description=nd.get("description", ""),
-            category=NodeCategory(cat) if cat in NodeCategory._value2member_map_ else NodeCategory.APPLICATION,
-            provider=nd.get("provider", ""), platform=nd.get("platform", ""),
-            state=FlowNodeState.IDLE,
-            position=nd.get("position", {"x": 0, "y": 0}),
-            group_id=nd.get("groupId", ""),
-        ))
+        nodes.append(
+            FlowNode(
+                node_id=nd.get("nodeId", ""),
+                label=nd.get("label", ""),
+                description=nd.get("description", ""),
+                category=NodeCategory(cat)
+                if cat in NodeCategory._value2member_map_
+                else NodeCategory.APPLICATION,
+                provider=nd.get("provider", ""),
+                platform=nd.get("platform", ""),
+                state=FlowNodeState.IDLE,
+                position=nd.get("position", {"x": 0, "y": 0}),
+                group_id=nd.get("groupId", ""),
+            )
+        )
     edges = []
     for ed in data.get("edges", []):
         ft = ed.get("flowType", "REQUEST")
-        edges.append(FlowEdge(
-            edge_id=ed.get("edgeId", ""), source_id=ed.get("sourceId", ""),
-            target_id=ed.get("targetId", ""),
-            flow_type=FlowType(ft) if ft in FlowType._value2member_map_ else FlowType.REQUEST,
-            state=FlowEdgeState.IDLE, label=ed.get("label", ""),
-        ))
+        edges.append(
+            FlowEdge(
+                edge_id=ed.get("edgeId", ""),
+                source_id=ed.get("sourceId", ""),
+                target_id=ed.get("targetId", ""),
+                flow_type=FlowType(ft) if ft in FlowType._value2member_map_ else FlowType.REQUEST,
+                state=FlowEdgeState.IDLE,
+                label=ed.get("label", ""),
+            )
+        )
     return FlowDefinition(
-        flow_id=data.get("flowId", ""), name=data.get("name", ""),
-        flow_type=FlowType.REQUEST, architecture_graph_id=data.get("architectureGraphId", ""),
-        entry_node_id=data.get("entryNodeId", ""), nodes=nodes, edges=edges,
+        flow_id=data.get("flowId", ""),
+        name=data.get("name", ""),
+        flow_type=FlowType.REQUEST,
+        architecture_graph_id=data.get("architectureGraphId", ""),
+        entry_node_id=data.get("entryNodeId", ""),
+        nodes=nodes,
+        edges=edges,
         groups=data.get("groups", []),
     )
 
@@ -287,7 +332,9 @@ def register_flow_routes(app: FastAPI) -> None:
         return {"designId": design_id, "flows": [f.to_dict() for f in flows], "count": len(flows)}
 
     @app.post("/api/v1/designs/{design_id}/simulate")
-    async def simulate_design(design_id: str, scenario: str = "HAPPY_PATH", flow_id: str = "", seed: int = 42):
+    async def simulate_design(
+        design_id: str, scenario: str = "HAPPY_PATH", flow_id: str = "", seed: int = 42
+    ):
         d = _designs.get(design_id)
         if not d:
             raise HTTPException(status_code=404, detail="Design not found")
@@ -297,7 +344,9 @@ def register_flow_routes(app: FastAPI) -> None:
             flows = [f for f in _flows.values() if f.architecture_graph_id == design_id]
             flow = flows[0] if flows else None
         if not flow:
-            raise HTTPException(status_code=404, detail="No flow for this design. Call /generate first.")
+            raise HTTPException(
+                status_code=404, detail="No flow for this design. Call /generate first."
+            )
 
         sim = FlowSimulator(flow=flow, scenario=scenario, seed=seed)
         events = sim.simulate()
@@ -325,14 +374,21 @@ def register_flow_routes(app: FastAPI) -> None:
         if not d:
             raise HTTPException(status_code=404, detail="Design not found")
         if d.status not in (DesignStatus.REVIEW_READY, DesignStatus.USER_REVIEW):
-            raise HTTPException(status_code=400, detail=f"Cannot accept design in status {d.status.value}")
+            raise HTTPException(
+                status_code=400, detail=f"Cannot accept design in status {d.status.value}"
+            )
         d.accept(accepted_by)
         flow = next((f for f in _flows.values() if f.architecture_graph_id == design_id), None)
         _persist_design(d, flow)
-        return {"design": d.to_dict(), "note": "No real infrastructure will be created by this action."}
+        return {
+            "design": d.to_dict(),
+            "note": "No real infrastructure will be created by this action.",
+        }
 
     @app.post("/api/v1/designs/{design_id}/request-change")
-    async def request_change(design_id: str, comment: str = "", node_id: str = "", severity: str = "INFO"):
+    async def request_change(
+        design_id: str, comment: str = "", node_id: str = "", severity: str = "INFO"
+    ):
         d = _designs.get(design_id)
         if not d:
             raise HTTPException(status_code=404, detail="Design not found")
@@ -353,29 +409,102 @@ def register_flow_routes(app: FastAPI) -> None:
         objective = brief.get("objective", "")
         components = brief.get("components", "")
         import uuid, json
+
         nodes, edges = [], []
         prev_id = "entry"
-        nodes.append({"id":"entry","type":"input","position":{"x":300,"y":0},"data":{"label":"User / Client","category":"USER","provider":provider}})
+        nodes.append(
+            {
+                "id": "entry",
+                "type": "input",
+                "position": {"x": 300, "y": 0},
+                "data": {"label": "User / Client", "category": "USER", "provider": provider},
+            }
+        )
         if provider == "AWS":
-            svcs = [("waf","WAF/Shield","SECURITY",0),("cf","CloudFront","NETWORK",70),("alb","ALB","NETWORK",140),("gw","API Gateway","GATEWAY",210),("lambda","Lambda","APPLICATION",280),("ecs","ECS/Fargate","APPLICATION",350),("rds","RDS","DATABASE",420),("elasticache","ElastiCache","CACHE",490),("s3","S3","STORAGE",560),("sqs","SQS","QUEUE",630),("kms","KMS","SECURITY",700)]
+            svcs = [
+                ("waf", "WAF/Shield", "SECURITY", 0),
+                ("cf", "CloudFront", "NETWORK", 70),
+                ("alb", "ALB", "NETWORK", 140),
+                ("gw", "API Gateway", "GATEWAY", 210),
+                ("lambda", "Lambda", "APPLICATION", 280),
+                ("ecs", "ECS/Fargate", "APPLICATION", 350),
+                ("rds", "RDS", "DATABASE", 420),
+                ("elasticache", "ElastiCache", "CACHE", 490),
+                ("s3", "S3", "STORAGE", 560),
+                ("sqs", "SQS", "QUEUE", 630),
+                ("kms", "KMS", "SECURITY", 700),
+            ]
         elif provider == "GCP":
-            svcs = [("clb","Cloud LB","NETWORK",0),("cloudrun","Cloud Run","APPLICATION",100),("gke","GKE","APPLICATION",200),("cloudsql","Cloud SQL","DATABASE",300),("bigquery","BigQuery","DATABASE",400),("pubsub","Pub/Sub","QUEUE",500),("gcs","Cloud Storage","STORAGE",600)]
+            svcs = [
+                ("clb", "Cloud LB", "NETWORK", 0),
+                ("cloudrun", "Cloud Run", "APPLICATION", 100),
+                ("gke", "GKE", "APPLICATION", 200),
+                ("cloudsql", "Cloud SQL", "DATABASE", 300),
+                ("bigquery", "BigQuery", "DATABASE", 400),
+                ("pubsub", "Pub/Sub", "QUEUE", 500),
+                ("gcs", "Cloud Storage", "STORAGE", 600),
+            ]
         else:
-            svcs = [("app","App Server","APPLICATION",0),("k8s","Kubernetes","APPLICATION",120),("db","Database","DATABASE",240),("cache","Cache","CACHE",360),("storage","Storage","STORAGE",480),("lb","Load Balancer","NETWORK",600)]
-        for sid,sl,sc,sy in svcs:
+            svcs = [
+                ("app", "App Server", "APPLICATION", 0),
+                ("k8s", "Kubernetes", "APPLICATION", 120),
+                ("db", "Database", "DATABASE", 240),
+                ("cache", "Cache", "CACHE", 360),
+                ("storage", "Storage", "STORAGE", 480),
+                ("lb", "Load Balancer", "NETWORK", 600),
+            ]
+        for sid, sl, sc, sy in svcs:
             nid = f"svc-{sid}"
-            nodes.append({"id":nid,"position":{"x":300,"y":100+sy},"data":{"label":sl,"category":sc,"provider":provider}})
-            edges.append({"id":f"e-{prev_id}-{nid}","source":prev_id,"target":nid,"label":"→","animated":True})
+            nodes.append(
+                {
+                    "id": nid,
+                    "position": {"x": 300, "y": 100 + sy},
+                    "data": {"label": sl, "category": sc, "provider": provider},
+                }
+            )
+            edges.append(
+                {
+                    "id": f"e-{prev_id}-{nid}",
+                    "source": prev_id,
+                    "target": nid,
+                    "label": "→",
+                    "animated": True,
+                }
+            )
             prev_id = nid
         all_nids = [n["id"] for n in nodes]
         all_eids = [e["id"] for e in edges]
         arch_nids = [n["id"] for n in nodes if n["data"]["category"] not in ("OBSERVABILITY",)]
-        data_nids = [n["id"] for n in nodes if n["data"]["category"] in ("DATABASE","STORAGE","QUEUE","CACHE")]
-        ops_nids = [n["id"] for n in nodes if n["data"]["category"] in ("USER","NETWORK","GATEWAY","APPLICATION","SERVICE")]
-        sec_nids = [n["id"] for n in nodes if n["data"]["category"] in ("SECURITY","IDENTITY")]
-        flow_def = {"nodes":nodes,"edges":edges,"layers":{"architecture":{"nodes":arch_nids,"edges":all_eids},"dataFlow":{"nodes":data_nids,"edges":[]},"operationFlow":{"nodes":ops_nids,"edges":all_eids},"securityFlow":{"nodes":sec_nids,"edges":[]}},"rationale":f"AI-generated {provider} architecture on {platform}. {objective}"}
+        data_nids = [
+            n["id"]
+            for n in nodes
+            if n["data"]["category"] in ("DATABASE", "STORAGE", "QUEUE", "CACHE")
+        ]
+        ops_nids = [
+            n["id"]
+            for n in nodes
+            if n["data"]["category"] in ("USER", "NETWORK", "GATEWAY", "APPLICATION", "SERVICE")
+        ]
+        sec_nids = [n["id"] for n in nodes if n["data"]["category"] in ("SECURITY", "IDENTITY")]
+        flow_def = {
+            "nodes": nodes,
+            "edges": edges,
+            "layers": {
+                "architecture": {"nodes": arch_nids, "edges": all_eids},
+                "dataFlow": {"nodes": data_nids, "edges": []},
+                "operationFlow": {"nodes": ops_nids, "edges": all_eids},
+                "securityFlow": {"nodes": sec_nids, "edges": []},
+            },
+            "rationale": f"AI-generated {provider} architecture on {platform}. {objective}",
+        }
         _persist_design(d, flow_def)
-        return {"designId":design_id,"flow":flow_def,"provider":provider,"platform":platform,"status":"AI_GENERATED"}
+        return {
+            "designId": design_id,
+            "flow": flow_def,
+            "provider": provider,
+            "platform": platform,
+            "status": "AI_GENERATED",
+        }
 
     @app.post("/api/v1/designs/{design_id}/update-flow")
     async def update_design_flow(design_id: str, body: dict[str, Any]):
@@ -384,7 +513,9 @@ def register_flow_routes(app: FastAPI) -> None:
         if not d:
             raise HTTPException(status_code=404, detail="Design not found")
         if d.status.value in ("ACCEPTED", "BASELINE_FROZEN"):
-            raise HTTPException(status_code=400, detail={"error": "Cannot edit accepted/frozen design"})
+            raise HTTPException(
+                status_code=400, detail={"error": "Cannot edit accepted/frozen design"}
+            )
         flow = body.get("flow", {})
         _persist_design(d, flow)
         return {"designId": design_id, "status": "updated"}
@@ -416,6 +547,7 @@ def register_flow_routes(app: FastAPI) -> None:
     @app.get("/api/v1/scenarios")
     async def list_scenarios():
         from .simulator import SCENARIO_CONFIG
+
         return {
             "scenarios": [
                 {"id": sid, "description": cfg["description"]}
